@@ -1,0 +1,6 @@
+{
+  "name": "OmniGrade - Smart OMR Answer Sheet Grading System",
+  "description": "Customizable Multiple-Choice OMR Answer Sheet Scanner & Auto-Grading Platform with Visual Template Editor, Batch Processing, and Analytics",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
