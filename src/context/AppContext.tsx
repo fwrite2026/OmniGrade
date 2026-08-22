@@ -7,6 +7,7 @@ import {
   ExamSubmission,
   Language,
   QuestionAnalytics,
+  RecognizedAnswer,
   SchoolClass,
   Student,
   UserRole,
@@ -14,10 +15,6 @@ import {
 } from '../types';
 import { translations } from '../locales/translations';
 import { DEFAULT_120_TEMPLATE, DEFAULT_USERS } from '../services/demoData';
-
-const OLD_DEMO_TEMPLATE_IDS = new Set(['tpl_fpt_60', 'tpl_fpt_40', 'tpl_gd_50', 'tpl_quiz_20', 'tpl_comp_100']);
-const OLD_DEMO_STUDENT_IDS = new Set(['std_01', 'std_02', 'std_03', 'std_04', 'std_05', 'std_06', 'std_07', 'std_08', 'std_09', 'std_10', 'std_11', 'std_12']);
-const OLD_DEMO_CLASS_IDS = new Set(['cls_6a1', 'cls_6a2', 'cls_9a1']);
 
 interface AppContextType {
   language: Language;
@@ -70,6 +67,7 @@ interface AppContextType {
     newOption: BubbleOption | null,
     reason: string
   ) => void;
+  regradeSubmissionWithVariant: (submissionId: string, variantCode: string) => void;
   approveSubmission: (submissionId: string) => void;
   deleteSubmission: (id: string) => void;
   deleteSubmissionsBatch: (ids: string[]) => void;
@@ -88,7 +86,8 @@ interface AppContextType {
   // Statistics Helper
   getExamStatistics: (examId: string) => ExamStatistics;
   
-  // Reset demo
+  // Backup Import & Reset
+  importBackupData: (backupData: any) => { success: boolean; message?: string };
   resetToDemoData: () => void;
 }
 
@@ -101,14 +100,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [users, setUsers] = useState<UserAccount[]>(() => {
     const saved = localStorage.getItem('omr_users');
-    if (saved) {
+    if (saved !== null) {
       try {
-        const parsed: UserAccount[] = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const hasAdmin = parsed.some(u => u.username.toLowerCase() === 'admin');
-          if (!hasAdmin) {
-            return [DEFAULT_USERS[0], ...parsed];
-          }
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       } catch (e) {
@@ -118,34 +113,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return DEFAULT_USERS;
   });
 
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
-    const savedUser = localStorage.getItem('omr_current_user');
-    if (savedUser) {
-      try {
-        const parsed: UserAccount = JSON.parse(savedUser);
-        return parsed;
-      } catch (e) {
-        console.error('Error parsing current user', e);
-      }
-    }
-    return null;
-  });
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
 
-  const [role, setRole] = useState<UserRole>(() => {
-    return currentUser?.role || 'admin';
-  });
+  const [role, setRole] = useState<UserRole>('teacher');
+
   const [schoolName, setSchoolName] = useState<string>(() => {
     return localStorage.getItem('omr_school_name') || 'TRƯỜNG PHỔ THÔNG';
   });
 
   const [templates, setTemplates] = useState<AnswerSheetTemplate[]>(() => {
     const saved = localStorage.getItem('omr_templates');
-    if (saved) {
+    if (saved !== null) {
       try {
-        const parsed: AnswerSheetTemplate[] = JSON.parse(saved);
-        const filtered = parsed.filter(t => !OLD_DEMO_TEMPLATE_IDS.has(t.id));
-        if (filtered.length > 0) {
-          return filtered;
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed;
         }
       } catch (e) {
         console.error('Error loading saved templates', e);
@@ -156,10 +138,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [exams, setExams] = useState<Exam[]>(() => {
     const saved = localStorage.getItem('omr_exams');
-    if (saved) {
+    if (saved !== null) {
       try {
-        const parsed: Exam[] = JSON.parse(saved);
-        return parsed.filter(e => e.id !== 'exam_eng_6_midterm');
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
       } catch (e) {
         console.error('Error loading saved exams', e);
       }
@@ -168,12 +152,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
 
   const [activeExamId, setActiveExamId] = useState<string | null>(() => {
+    const savedId = localStorage.getItem('omr_active_exam_id');
+    if (savedId) return savedId;
     const saved = localStorage.getItem('omr_exams');
-    if (saved) {
+    if (saved !== null) {
       try {
         const parsed: Exam[] = JSON.parse(saved);
-        const filtered = parsed.filter(e => e.id !== 'exam_eng_6_midterm');
-        return filtered[0]?.id || null;
+        return parsed[0]?.id || null;
       } catch {
         return null;
       }
@@ -182,12 +167,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
 
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(() => {
+    const savedId = localStorage.getItem('omr_active_template_id');
+    if (savedId) return savedId;
     const saved = localStorage.getItem('omr_templates');
-    if (saved) {
+    if (saved !== null) {
       try {
         const parsed: AnswerSheetTemplate[] = JSON.parse(saved);
-        const filtered = parsed.filter(t => !OLD_DEMO_TEMPLATE_IDS.has(t.id));
-        return filtered[0]?.id || DEFAULT_120_TEMPLATE.id;
+        return parsed[0]?.id || DEFAULT_120_TEMPLATE.id;
       } catch {
         return DEFAULT_120_TEMPLATE.id;
       }
@@ -197,10 +183,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [submissions, setSubmissions] = useState<ExamSubmission[]>(() => {
     const saved = localStorage.getItem('omr_submissions');
-    if (saved) {
+    if (saved !== null) {
       try {
-        const parsed: ExamSubmission[] = JSON.parse(saved);
-        return parsed.filter(s => s.examId !== 'exam_eng_6_midterm' && !s.id.startsWith('sub_demo_'));
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
       } catch (e) {
         console.error('Error loading saved submissions', e);
       }
@@ -210,10 +198,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [students, setStudents] = useState<Student[]>(() => {
     const saved = localStorage.getItem('omr_students');
-    if (saved) {
+    if (saved !== null) {
       try {
-        const parsed: Student[] = JSON.parse(saved);
-        return parsed.filter(s => !OLD_DEMO_STUDENT_IDS.has(s.id));
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
       } catch (e) {
         console.error('Error loading saved students', e);
       }
@@ -223,10 +213,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [classes, setClasses] = useState<SchoolClass[]>(() => {
     const saved = localStorage.getItem('omr_classes');
-    if (saved) {
+    if (saved !== null) {
       try {
-        const parsed: SchoolClass[] = JSON.parse(saved);
-        return parsed.filter(c => !OLD_DEMO_CLASS_IDS.has(c.id));
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
       } catch (e) {
         console.error('Error loading saved classes', e);
       }
@@ -248,8 +240,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [templates]);
 
   useEffect(() => {
+    if (activeTemplateId) {
+      localStorage.setItem('omr_active_template_id', activeTemplateId);
+    } else {
+      localStorage.removeItem('omr_active_template_id');
+    }
+  }, [activeTemplateId]);
+
+  useEffect(() => {
     localStorage.setItem('omr_exams', JSON.stringify(exams));
   }, [exams]);
+
+  useEffect(() => {
+    if (activeExamId) {
+      localStorage.setItem('omr_active_exam_id', activeExamId);
+    } else {
+      localStorage.removeItem('omr_active_exam_id');
+    }
+  }, [activeExamId]);
 
   useEffect(() => {
     localStorage.setItem('omr_submissions', JSON.stringify(submissions));
@@ -540,6 +548,92 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }));
   };
 
+  const regradeSubmissionWithVariant = (submissionId: string, variantCode: string) => {
+    setSubmissions(prev => prev.map(sub => {
+      if (sub.id !== submissionId) return sub;
+
+      const exam = exams.find(e => e.id === sub.examId);
+      if (!exam) return sub;
+
+      const matchedVariant = exam.variants?.find(v => v.code.trim().toLowerCase() === variantCode.trim().toLowerCase());
+      const targetQuestions = matchedVariant?.questions || exam.questions;
+
+      let totalEarned = 0;
+      let correctCount = 0;
+      let wrongCount = 0;
+      let blankCount = 0;
+      let multipleCount = 0;
+      let uncertainCount = 0;
+
+      const updatedAnswers: RecognizedAnswer[] = (sub.recognizedAnswers || []).map(ans => {
+        const qConfig = targetQuestions.find(q => q.questionNumber === ans.questionNumber);
+        const correctAns = qConfig?.correctAnswer || ans.correctAnswer;
+        const qPoints = qConfig?.points || (sub.maxScore / (exam.numQuestions || 1));
+
+        const isCorrect = !!ans.selectedOption && ans.selectedOption === correctAns;
+        const earned = isCorrect ? qPoints : 0;
+
+        if (isCorrect) {
+          correctCount++;
+          totalEarned += earned;
+        } else if (ans.selectedOption) {
+          wrongCount++;
+        } else if (ans.status === 'BLANK') {
+          blankCount++;
+        } else if (ans.status === 'MULTIPLE') {
+          multipleCount++;
+        } else if (ans.status === 'UNCERTAIN') {
+          uncertainCount++;
+        } else {
+          wrongCount++;
+        }
+
+        return {
+          ...ans,
+          correctAnswer: correctAns,
+          isCorrect,
+          pointsEarned: earned
+        };
+      });
+
+      const maxScore = exam.maxScore;
+      const totalPossible = targetQuestions.reduce((acc, q) => acc + (q.points || 0.25), 0) || maxScore;
+      const precision = exam.decimalPrecision ?? 2;
+      const rawScore = totalPossible > 0 ? (totalEarned / totalPossible) * maxScore : 0;
+      const multiplier = Math.pow(10, precision);
+      const recalculatedScore = Math.round(rawScore * multiplier) / multiplier;
+
+      const hasIssues = multipleCount > 0 || uncertainCount > 0;
+      const newStatus = hasIssues ? 'NEEDS_REVIEW' : 'GRADED';
+
+      const newAuditLog = {
+        id: 'log_' + Math.random().toString(36).slice(2),
+        submissionId: sub.id,
+        action: 'VARIANT_OVERRIDE',
+        newValue: `Đổi chấm sang Mã đề ${variantCode}`,
+        changedBy: role === 'admin' ? 'Administrator' : 'Teacher',
+        timestamp: new Date().toISOString(),
+        reason: `Áp dụng bộ đáp án mã đề ${variantCode}`
+      };
+
+      return {
+        ...sub,
+        appliedVariantCode: variantCode,
+        matchedVariantTitle: matchedVariant ? (matchedVariant.title || `Mã đề ${matchedVariant.code}`) : `Mã đề ${variantCode}`,
+        totalScore: recalculatedScore,
+        totalCorrect: correctCount,
+        totalWrong: wrongCount,
+        totalBlank: blankCount,
+        totalMultiple: multipleCount,
+        totalUncertain: uncertainCount,
+        status: newStatus,
+        needsReviewReason: hasIssues ? sub.needsReviewReason : undefined,
+        recognizedAnswers: updatedAnswers,
+        auditLogs: [newAuditLog, ...(sub.auditLogs || [])]
+      };
+    }));
+  };
+
   const approveSubmission = (submissionId: string) => {
     setSubmissions(prev => prev.map(sub => {
       if (sub.id !== submissionId) return sub;
@@ -745,6 +839,82 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
   };
 
+  const importBackupData = (backupData: any): { success: boolean; message?: string } => {
+    try {
+      let data = backupData;
+      if (typeof backupData === 'string') {
+        data = JSON.parse(backupData);
+      }
+      if (!data || typeof data !== 'object') {
+        return { success: false, message: 'Định dạng dữ liệu sao lưu không hợp lệ!' };
+      }
+
+      if (data.schoolName && typeof data.schoolName === 'string') {
+        setSchoolName(data.schoolName);
+        localStorage.setItem('omr_school_name', data.schoolName);
+      }
+
+      if (data.users) {
+        const parsedUsers = typeof data.users === 'string' ? JSON.parse(data.users) : data.users;
+        if (Array.isArray(parsedUsers)) {
+          setUsers(parsedUsers);
+          localStorage.setItem('omr_users', JSON.stringify(parsedUsers));
+        }
+      }
+
+      if (data.templates) {
+        const parsedTemplates = typeof data.templates === 'string' ? JSON.parse(data.templates) : data.templates;
+        if (Array.isArray(parsedTemplates)) {
+          setTemplates(parsedTemplates);
+          localStorage.setItem('omr_templates', JSON.stringify(parsedTemplates));
+          if (parsedTemplates[0]?.id) {
+            setActiveTemplateId(parsedTemplates[0].id);
+          }
+        }
+      }
+
+      if (data.exams) {
+        const parsedExams = typeof data.exams === 'string' ? JSON.parse(data.exams) : data.exams;
+        if (Array.isArray(parsedExams)) {
+          setExams(parsedExams);
+          localStorage.setItem('omr_exams', JSON.stringify(parsedExams));
+          if (parsedExams[0]?.id) {
+            setActiveExamId(parsedExams[0].id);
+          }
+        }
+      }
+
+      if (data.submissions) {
+        const parsedSubs = typeof data.submissions === 'string' ? JSON.parse(data.submissions) : data.submissions;
+        if (Array.isArray(parsedSubs)) {
+          setSubmissions(parsedSubs);
+          localStorage.setItem('omr_submissions', JSON.stringify(parsedSubs));
+        }
+      }
+
+      if (data.students) {
+        const parsedStudents = typeof data.students === 'string' ? JSON.parse(data.students) : data.students;
+        if (Array.isArray(parsedStudents)) {
+          setStudents(parsedStudents);
+          localStorage.setItem('omr_students', JSON.stringify(parsedStudents));
+        }
+      }
+
+      if (data.classes) {
+        const parsedClasses = typeof data.classes === 'string' ? JSON.parse(data.classes) : data.classes;
+        if (Array.isArray(parsedClasses)) {
+          setClasses(parsedClasses);
+          localStorage.setItem('omr_classes', JSON.stringify(parsedClasses));
+        }
+      }
+
+      return { success: true, message: 'Đã nhập dữ liệu sao lưu thành công!' };
+    } catch (err: any) {
+      console.error('Import error', err);
+      return { success: false, message: err?.message || 'Lỗi khi đọc file sao lưu!' };
+    }
+  };
+
   const resetToDemoData = () => {
     setTemplates([DEFAULT_120_TEMPLATE]);
     setActiveTemplateId(DEFAULT_120_TEMPLATE.id);
@@ -795,6 +965,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         addSubmissions,
         updateSubmission,
         overrideAnswer,
+        regradeSubmissionWithVariant,
         approveSubmission,
         deleteSubmission,
         deleteSubmissionsBatch,
@@ -808,6 +979,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         deleteClass,
         deleteClassesBatch,
         getExamStatistics,
+        importBackupData,
         resetToDemoData
       }}
     >

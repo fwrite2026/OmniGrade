@@ -585,21 +585,6 @@ export const AdminUserManagement: React.FC = () => {
                       {/* Actions */}
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {/* Quick Switch Account (Impersonate for testing) */}
-                          {!isCurrent && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                switchUserDirect(user.id);
-                                showToast(`Đã chuyển sang tài khoản @${user.username}!`);
-                              }}
-                              className="p-1.5 rounded-lg bg-white/5 hover:bg-blue-500/20 text-slate-400 hover:text-blue-300 border border-white/10 hover:border-blue-500/30 transition cursor-pointer"
-                              title={t.admin.quickLoginAsThisUser}
-                            >
-                              <LogIn className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-
                           {/* Edit user */}
                           <button
                             type="button"

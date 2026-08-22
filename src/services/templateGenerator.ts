@@ -1660,38 +1660,82 @@ export async function createSimulatedFilledSheet(
   const width = baseCanvas.width;
   const height = baseCanvas.height;
 
+  const fillBubble = (zone: RecognitionZone, isLight = false) => {
+    const zX = zone.x * width;
+    const zY = zone.y * height;
+    const zW = zone.width * width;
+    const zH = zone.height * height;
+    const radius = Math.min(zW, zH) / 2;
+    const centerX = zX + zW / 2;
+    const centerY = zY + zH / 2;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius * 0.9, 0, Math.PI * 2);
+    ctx.fillStyle = isLight ? 'rgba(70, 70, 70, 0.45)' : 'rgba(20, 20, 20, 0.94)';
+    ctx.fill();
+
+    // Add realistic pencil texture strokes
+    ctx.strokeStyle = isLight ? 'rgba(40, 40, 40, 0.3)' : 'rgba(10, 10, 10, 0.85)';
+    ctx.lineWidth = 2.5;
+    for (let i = -radius * 0.6; i <= radius * 0.6; i += 4) {
+      ctx.beginPath();
+      ctx.moveTo(centerX - radius * 0.7, centerY + i);
+      ctx.lineTo(centerX + radius * 0.7, centerY + i);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  // Fill Student ID bubbles if present
+  if (student?.studentId) {
+    const cleanId = student.studentId.replace(/\D/g, '');
+    const sbdCols = Array.from(new Set(
+      template.zones
+        .filter(z => z.type === 'student_id_bubble' && z.digitPosition !== undefined)
+        .map(z => z.digitPosition as number)
+    )).sort((a, b) => a - b);
+
+    const paddedId = cleanId.padStart(sbdCols.length, '0');
+    sbdCols.forEach((colIdx, idx) => {
+      const char = paddedId[idx];
+      if (char !== undefined) {
+        const val = parseInt(char, 10);
+        const z = template.zones.find(
+          item => item.type === 'student_id_bubble' && item.digitPosition === colIdx && item.digitValue === val
+        );
+        if (z) fillBubble(z);
+      }
+    });
+  }
+
+  // Fill Exam Code (Mã Đề) bubbles if present
+  if (examCode) {
+    const cleanCode = examCode.replace(/\D/g, '');
+    const codeCols = Array.from(new Set(
+      template.zones
+        .filter(z => z.type === 'exam_code_bubble' && z.digitPosition !== undefined)
+        .map(z => z.digitPosition as number)
+    )).sort((a, b) => a - b);
+
+    const paddedCode = cleanCode.padStart(codeCols.length, '0');
+    codeCols.forEach((colIdx, idx) => {
+      const char = paddedCode[idx];
+      if (char !== undefined) {
+        const val = parseInt(char, 10);
+        const z = template.zones.find(
+          item => item.type === 'exam_code_bubble' && item.digitPosition === colIdx && item.digitValue === val
+        );
+        if (z) fillBubble(z);
+      }
+    });
+  }
+
   for (const [qNumStr, markedAnswer] of Object.entries(answers)) {
     const qNum = parseInt(qNumStr, 10);
     if (markedAnswer === 'BLANK') continue;
 
     const qZones = template.zones.filter(z => z.type === 'bubble' && z.questionNumber === qNum);
-
-    const fillBubble = (zone: RecognitionZone, isLight = false) => {
-      const zX = zone.x * width;
-      const zY = zone.y * height;
-      const zW = zone.width * width;
-      const zH = zone.height * height;
-      const radius = Math.min(zW, zH) / 2;
-      const centerX = zX + zW / 2;
-      const centerY = zY + zH / 2;
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, radius * 0.9, 0, Math.PI * 2);
-      ctx.fillStyle = isLight ? 'rgba(70, 70, 70, 0.45)' : 'rgba(20, 20, 20, 0.94)';
-      ctx.fill();
-
-      // Add realistic pencil texture strokes
-      ctx.strokeStyle = isLight ? 'rgba(40, 40, 40, 0.3)' : 'rgba(10, 10, 10, 0.85)';
-      ctx.lineWidth = 2.5;
-      for (let i = -radius * 0.6; i <= radius * 0.6; i += 4) {
-        ctx.beginPath();
-        ctx.moveTo(centerX - radius * 0.7, centerY + i);
-        ctx.lineTo(centerX + radius * 0.7, centerY + i);
-        ctx.stroke();
-      }
-      ctx.restore();
-    };
 
     if (markedAnswer === 'MULTIPLE') {
       // Mark 2 bubbles

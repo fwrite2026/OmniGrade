@@ -258,6 +258,15 @@ export interface QuestionConfig {
   difficulty?: 'easy' | 'medium' | 'hard';
 }
 
+export interface ExamVariant {
+  id: string;
+  code: string;                      // e.g. "101", "102", "103", "104"
+  title?: string;
+  questions: QuestionConfig[];
+  answerKeyMap?: Record<number, BubbleOption>;
+  description?: string;
+}
+
 export interface Exam {
   id: string;
   code: string;
@@ -277,7 +286,9 @@ export interface Exam {
   passingScore: number;
   decimalPrecision: 0 | 1 | 2;
   templateId: string;
-  questions: QuestionConfig[];
+  questions: QuestionConfig[];       // Default / Primary answer key
+  variants?: ExamVariant[];          // List of multi-code variants (e.g. 101, 102, 103, 104)
+  defaultVariantCode?: string;       // Primary variant code (e.g. "101")
   instructions?: string;
   createdAt: string;
   updatedAt: string;
@@ -360,6 +371,9 @@ export interface ExamSubmission {
   studentId?: string;
   studentName?: string;
   className?: string;
+  detectedExamCode?: string;          // Mã đề nhận diện được từ ô tô mã đề
+  appliedVariantCode?: string;         // Mã đề áp dụng để đối chiếu đáp án chấm điểm
+  matchedVariantTitle?: string;        // Tên mô tả mã đề
   scannedImageUrl: string;
   processedImageUrl?: string;
   scanDate: string;

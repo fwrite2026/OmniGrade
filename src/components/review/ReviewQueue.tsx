@@ -15,11 +15,13 @@ import {
   ChevronRight,
   ChevronLeft,
   ArrowRight,
-  ZoomIn
+  ZoomIn,
+  Tag,
+  RefreshCw
 } from 'lucide-react';
 
 export const ReviewQueue: React.FC = () => {
-  const { t, submissions, activeExam, overrideAnswer, approveSubmission, role } = useApp();
+  const { t, submissions, activeExam, overrideAnswer, approveSubmission, regradeSubmissionWithVariant, role } = useApp();
 
   const flaggedSubmissions = submissions.filter(s => 
     s.status === 'NEEDS_REVIEW' || s.status === 'MULTIPLE_ANSWERS' || s.status === 'LOW_CONFIDENCE'
@@ -151,6 +153,57 @@ export const ReviewQueue: React.FC = () => {
               <span className="text-xs text-slate-400">/10</span>
             </div>
           </div>
+
+          {/* Exam Variant Code Recognition & Re-grade Box */}
+          {activeExam && (
+            <div className="p-3 bg-cyan-950/30 rounded-2xl border border-cyan-500/20 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-cyan-300 flex items-center gap-1.5">
+                  <Tag className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Mã đề nhận diện:</span>
+                </span>
+                <span className="font-mono font-bold px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-200 border border-cyan-500/30">
+                  {currentSubmission.detectedExamCode || 'Chưa nhận diện'}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-300 pt-1">
+                <span>Đáp án đang áp dụng:</span>
+                <span className="font-bold text-white">
+                  {currentSubmission.matchedVariantTitle || `Mã đề ${currentSubmission.appliedVariantCode || activeExam.code}`}
+                </span>
+              </div>
+
+              {activeExam.variants && activeExam.variants.length > 1 && (
+                <div className="pt-2 border-t border-white/10 space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase block">
+                    Đổi mã đề & Chấm lại bài này:
+                  </label>
+                  <div className="flex flex-wrap gap-1">
+                    {activeExam.variants.map((variant) => {
+                      const isCurrentVariant = (currentSubmission.appliedVariantCode || activeExam.defaultVariantCode) === variant.code;
+                      return (
+                        <button
+                          key={variant.id}
+                          type="button"
+                          disabled={isCurrentVariant}
+                          onClick={() => regradeSubmissionWithVariant(currentSubmission.id, variant.code)}
+                          className={`px-2 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer flex items-center gap-1 ${
+                            isCurrentVariant
+                              ? 'bg-cyan-500 text-white shadow-xs cursor-default'
+                              : 'bg-white/5 hover:bg-white/15 text-slate-300 border border-white/10'
+                          }`}
+                        >
+                          <RefreshCw className={`w-2.5 h-2.5 ${isCurrentVariant ? 'hidden' : ''}`} />
+                          <span>Mã {variant.code}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Flagged issues alert */}
           {flaggedQuestionsInSub.length > 0 && (

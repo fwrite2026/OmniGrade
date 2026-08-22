@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ChangePasswordModal } from '../auth/ChangePasswordModal';
 import {
@@ -9,10 +9,14 @@ import {
   RotateCcw,
   CheckCircle2,
   Download,
+  Upload,
   Save,
   KeyRound,
   Shield,
-  UserCheck
+  UserCheck,
+  GitBranch,
+  HardDrive,
+  FileJson
 } from 'lucide-react';
 import { DEFAULT_120_TEMPLATE } from '../../services/demoData';
 
@@ -28,6 +32,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
     language,
     setLanguage,
     resetToDemoData,
+    importBackupData,
     currentUser
   } = useApp();
 
@@ -36,7 +41,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
   const [multipleThreshold, setMultipleThreshold] = useState<number>(75);
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(70);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = () => {
     setSchoolName(localSchoolName);
@@ -51,6 +58,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
       templates: localStorage.getItem('omr_templates'),
       submissions: localStorage.getItem('omr_submissions'),
       students: localStorage.getItem('omr_students'),
+      classes: localStorage.getItem('omr_classes'),
       users: localStorage.getItem('omr_users'),
       exportedAt: new Date().toISOString()
     };
@@ -63,8 +71,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
     URL.revokeObjectURL(url);
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const res = importBackupData(text);
+        if (res.success) {
+          setImportStatus('Đã khôi phục / đồng bộ dữ liệu sao lưu thành công!');
+          setTimeout(() => setImportStatus(null), 4000);
+        } else {
+          alert(res.message || 'Lỗi khi nhập dữ liệu');
+        }
+      } catch (err) {
+        alert('File JSON không hợp lệ!');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   const handleResetDemo = () => {
-    if (window.confirm('Đặt lại hệ thống về trạng thái sạch ban đầu với phiếu chuẩn 120 câu?')) {
+    if (window.confirm('Bạn có chắc chắn muốn đặt lại hệ thống về trạng thái phiếu chuẩn 120 câu? Hành động này sẽ xóa các bài thi hiện tại.')) {
       resetToDemoData();
       localStorage.setItem('omr_templates', JSON.stringify([DEFAULT_120_TEMPLATE]));
       localStorage.setItem('omr_exams', JSON.stringify([]));
@@ -258,27 +288,70 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
         </div>
       )}
 
-      {/* Backup & System Maintenance */}
-      <div className="bg-[#0E131F]/80 backdrop-blur-xl rounded-3xl border border-white/5 p-6 shadow-2xl space-y-4">
-        <h3 className="text-sm font-bold text-white flex items-center gap-2 border-b border-white/10 pb-3">
-          <Database className="w-4 h-4 text-cyan-400" />
-          <span>Sao Lưu & Dữ Liệu Mẫu</span>
-        </h3>
+      {/* Backup, Storage & GitHub Sync */}
+      <div className="bg-[#0E131F]/80 backdrop-blur-xl rounded-3xl border border-white/5 p-6 shadow-2xl space-y-5">
+        <div className="flex items-center justify-between border-b border-white/10 pb-3">
+          <h3 className="text-sm font-bold text-white flex items-center gap-2">
+            <Database className="w-4 h-4 text-cyan-400" />
+            <span>Kho Lưu Trữ, Sao Lưu & Đồng Bộ Dữ Liệu</span>
+          </h3>
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 text-[11px] font-semibold">
+            <GitBranch className="w-3 h-3 text-cyan-400" />
+            <span>Đồng bộ GitHub / Local</span>
+          </div>
+        </div>
 
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+        {importStatus && (
+          <div className="p-3.5 bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 text-xs font-semibold rounded-2xl flex items-center gap-2 shadow-lg shadow-emerald-500/10">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{importStatus}</span>
+          </div>
+        )}
+
+        <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5 space-y-2">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+            <HardDrive className="w-4 h-4 text-cyan-400" />
+            <span>Chính sách lưu trữ & Giữ nguyên hiện trạng dữ liệu</span>
+          </div>
+          <p className="text-xs text-slate-400 leading-relaxed">
+            Toàn bộ dữ liệu do Admin và người dùng tạo mới, hiệu chỉnh hoặc xóa (gồm danh sách kỳ thi, phiếu trả lời, bài thi đã chấm, học sinh, lớp học và tài khoản) được lưu trữ bền vững và giữ nguyên hiện trạng. Hệ thống không tự động khôi phục dữ liệu mẫu hay thay đổi trạng thái của người dùng khi làm mới trang.
+          </p>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2">
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            {/* Hidden file input */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept=".json,application/json"
+              className="hidden"
+            />
+
             <button
+              id="btn-export-backup"
               onClick={handleExportBackup}
-              className="flex items-center gap-1.5 px-4 py-2 bg-white/5 hover:bg-white/10 text-slate-300 font-semibold text-xs rounded-xl border border-white/10 transition cursor-pointer"
+              className="flex items-center gap-2 px-4 py-2.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 font-semibold text-xs rounded-xl border border-cyan-500/30 transition cursor-pointer shadow-sm"
             >
               <Download className="w-4 h-4 text-cyan-400" />
-              <span>{t.settings.exportBackup}</span>
+              <span>{t.settings.exportBackup} (JSON)</span>
+            </button>
+
+            <button
+              id="btn-import-backup"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 px-4 py-2.5 bg-white/5 hover:bg-white/10 text-slate-200 font-semibold text-xs rounded-xl border border-white/10 transition cursor-pointer shadow-sm"
+            >
+              <Upload className="w-4 h-4 text-indigo-400" />
+              <span>Nhập sao lưu / Đồng bộ JSON</span>
             </button>
           </div>
 
           <button
+            id="btn-reset-demo"
             onClick={handleResetDemo}
-            className="flex items-center gap-1.5 px-4 py-2 bg-rose-950/30 hover:bg-rose-950/50 text-rose-400 font-semibold text-xs rounded-xl transition cursor-pointer border border-rose-500/30"
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-rose-950/30 hover:bg-rose-950/50 text-rose-400 font-semibold text-xs rounded-xl transition cursor-pointer border border-rose-500/30 shrink-0"
           >
             <RotateCcw className="w-4 h-4" />
             <span>{t.settings.resetDemo}</span>

@@ -347,6 +347,7 @@ export const ResultsDashboard: React.FC = () => {
                 <th className="py-3 px-3">Mã HS / SBD</th>
                 <th className="py-3 px-3">Họ và Tên</th>
                 <th className="py-3 px-3">Lớp</th>
+                <th className="py-3 px-3 text-center">Mã đề</th>
                 <th className="py-3 px-3 text-center">Số câu đúng</th>
                 <th className="py-3 px-3 text-center">Sai</th>
                 <th className="py-3 px-3 text-center">Bỏ trống</th>
@@ -379,6 +380,11 @@ export const ResultsDashboard: React.FC = () => {
                     <td className="py-3 px-3 font-mono font-bold text-cyan-300">{sub.studentId}</td>
                     <td className="py-3 px-3 font-semibold text-white">{sub.studentName}</td>
                     <td className="py-3 px-3 text-slate-400">{sub.className}</td>
+                    <td className="py-3 px-3 text-center">
+                      <span className="font-mono font-bold text-xs px-2 py-0.5 rounded-md bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                        {sub.appliedVariantCode || sub.detectedExamCode || currentExam.code}
+                      </span>
+                    </td>
                     <td className="py-3 px-3 text-center font-bold text-emerald-400">
                       {sub.totalCorrect} / {currentExam.numQuestions}
                     </td>

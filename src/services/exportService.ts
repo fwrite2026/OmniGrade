@@ -15,6 +15,7 @@ export function exportResultsToExcel(exam: Exam, submissions: ExamSubmission[]):
       'Mã Học Sinh': sub.studentId || 'N/A',
       'Họ và Tên': sub.studentName || 'Chưa rõ',
       'Lớp': sub.className || exam.className,
+      'Mã Đề': sub.appliedVariantCode || sub.detectedExamCode || exam.code,
       'Điểm Số': sub.totalScore,
       'Thang Điểm': sub.maxScore,
       'Số Câu Đúng': sub.totalCorrect,
@@ -68,7 +69,7 @@ export function exportResultsToExcel(exam: Exam, submissions: ExamSubmission[]):
  */
 export function exportResultsToCSV(exam: Exam, submissions: ExamSubmission[]): void {
   const rows = [
-    ['STT', 'Ma_HS', 'Ho_Ten', 'Lop', 'Diem_So', 'So_Cau_Dung', 'Trang_Thai']
+    ['STT', 'Ma_HS', 'Ho_Ten', 'Lop', 'Ma_De', 'Diem_So', 'So_Cau_Dung', 'Trang_Thai']
   ];
 
   submissions.forEach((sub, idx) => {
@@ -77,6 +78,7 @@ export function exportResultsToCSV(exam: Exam, submissions: ExamSubmission[]): v
       sub.studentId || '',
       `"${sub.studentName || ''}"`,
       sub.className || '',
+      sub.appliedVariantCode || sub.detectedExamCode || exam.code,
       sub.totalScore.toString(),
       sub.totalCorrect.toString(),
       sub.status

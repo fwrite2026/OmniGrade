@@ -19,7 +19,7 @@ export const StudentReportModal: React.FC<StudentReportModalProps> = ({ exam, su
     doc.setFontSize(11);
     doc.setTextColor(50, 50, 50);
     doc.text(`Họ và tên: ${submission.studentName}`, 14, 30);
-    doc.text(`Mã HS: ${submission.studentId} | Lớp: ${submission.className}`, 14, 37);
+    doc.text(`Mã HS: ${submission.studentId} | Lớp: ${submission.className} | Mã đề: ${submission.appliedVariantCode || submission.detectedExamCode || exam.code}`, 14, 37);
     doc.text(`Bài thi: ${exam.title} (${exam.code})`, 14, 44);
     doc.text(`Điểm số: ${submission.totalScore} / ${exam.maxScore}`, 14, 51);
     doc.text(`Số câu đúng: ${submission.totalCorrect} / ${exam.numQuestions}`, 14, 58);
@@ -54,7 +54,9 @@ export const StudentReportModal: React.FC<StudentReportModalProps> = ({ exam, su
             </div>
             <div>
               <h3 className="font-bold text-white text-base">{submission.studentName}</h3>
-              <p className="text-xs text-slate-400">Mã HS: <span className="text-cyan-300 font-mono">{submission.studentId}</span> • Lớp: {submission.className}</p>
+              <p className="text-xs text-slate-400">
+                Mã HS: <span className="text-cyan-300 font-mono">{submission.studentId}</span> • Lớp: {submission.className} • Mã đề: <span className="text-cyan-400 font-bold px-1.5 py-0.5 bg-cyan-500/10 border border-cyan-500/20 rounded-md">{submission.appliedVariantCode || submission.detectedExamCode || exam.code}</span>
+              </p>
             </div>
           </div>
 

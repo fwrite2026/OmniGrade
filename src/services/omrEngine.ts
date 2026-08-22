@@ -1,4 +1,4 @@
-import { AnswerSheetTemplate, BubbleOption, Exam, ExamSubmission, RecognizedAnswer, Student } from '../types';
+import { AnswerSheetTemplate, BubbleOption, Exam, ExamSubmission, ExamVariant, QuestionConfig, RecognizedAnswer, Student } from '../types';
 
 export interface OMRProcessingOptions {
   fillThreshold?: number;       // Default 0.35
@@ -210,10 +210,44 @@ export async function processAnswerSheet(
     matchedStudent = students[0];
   }
 
+  // Determine Exam Variant (Mã Đề) for grading
+  let matchedVariant: ExamVariant | undefined;
+  let appliedVariantCode = exam?.defaultVariantCode || exam?.code || '101';
+  let variantMismatch = false;
+
+  if (exam?.variants && exam.variants.length > 0) {
+    if (detectedExamCode) {
+      const cleanDetected = detectedExamCode.trim().toLowerCase();
+      const numDetected = cleanDetected.replace(/^0+/, '');
+      
+      matchedVariant = exam.variants.find(v => {
+        const cleanV = v.code.trim().toLowerCase();
+        const numV = cleanV.replace(/^0+/, '');
+        return cleanV === cleanDetected || (numDetected !== '' && numV === numDetected) || cleanV.includes(cleanDetected);
+      });
+
+      if (matchedVariant) {
+        appliedVariantCode = matchedVariant.code;
+      } else {
+        // Did not match any registered variant
+        variantMismatch = true;
+        matchedVariant = exam.variants[0];
+        appliedVariantCode = exam.variants[0].code;
+      }
+    } else {
+      matchedVariant = exam.variants[0];
+      appliedVariantCode = exam.variants[0].code;
+    }
+  }
+
   const examId = exam?.id || 'exam_default';
   const examMaxScore = exam?.maxScore ?? 10;
   const examNumQuestions = exam?.numQuestions || template.numQuestions || 120;
-  const examQuestions = exam?.questions && exam.questions.length > 0
+  
+  // Select questions key based on the matched variant or fallback
+  const examQuestions: QuestionConfig[] = matchedVariant && matchedVariant.questions && matchedVariant.questions.length > 0
+    ? matchedVariant.questions
+    : exam?.questions && exam.questions.length > 0
     ? exam.questions
     : Array.from({ length: examNumQuestions }, (_, idx) => ({
         questionNumber: idx + 1,
@@ -231,7 +265,7 @@ export async function processAnswerSheet(
   let totalPointsPossible = 0;
   let confidenceSum = 0;
 
-  // Process each question based on Exam Config
+  // Process each question based on Variant Config
   for (const qConfig of examQuestions) {
     const qNum = qConfig.questionNumber;
     const qData = questionResultsMap[qNum];
@@ -350,7 +384,10 @@ export async function processAnswerSheet(
   let overallStatus: ExamSubmission['status'] = 'GRADED';
   let reviewReason = '';
 
-  if (totalMultiple > 0) {
+  if (variantMismatch) {
+    overallStatus = 'NEEDS_REVIEW';
+    reviewReason = `Mã đề nhận diện "${detectedExamCode}" không khớp danh sách mã đề của kỳ thi (${exam?.variants?.map(v => v.code).join(', ')})`;
+  } else if (totalMultiple > 0) {
     overallStatus = 'NEEDS_REVIEW';
     reviewReason = `${totalMultiple} câu tô nhiều đáp án`;
   } else if (totalUncertain > 0) {
@@ -372,6 +409,9 @@ export async function processAnswerSheet(
     studentId: matchedStudent?.studentId || detectedStudentId || 'UNKNOWN',
     studentName: matchedStudent?.name || 'Học sinh chưa xác định',
     className: matchedStudent?.className || exam?.className || '12A1',
+    detectedExamCode: detectedExamCode || undefined,
+    appliedVariantCode: appliedVariantCode,
+    matchedVariantTitle: matchedVariant ? (matchedVariant.title || `Mã đề ${matchedVariant.code}`) : `Mã đề ${appliedVariantCode}`,
     scannedImageUrl: imageUrl,
     scanDate: new Date().toISOString(),
     status: overallStatus,
