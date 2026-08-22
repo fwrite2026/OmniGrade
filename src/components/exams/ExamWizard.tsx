@@ -63,7 +63,7 @@ export const ExamWizard: React.FC<ExamWizardProps> = ({ onFinish, onCancel }) =>
   const [passingScore, setPassingScore] = useState<number>(5.0);
   const [decimalPrecision, setDecimalPrecision] = useState<0 | 1 | 2>(2);
   const [instructions, setInstructions] = useState<string>('Dùng bút chì 2B tô kín ô tròn tương ứng với đáp án đúng.');
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(templates[0]?.id || 'tpl_fpt_40');
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(templates[0]?.id || 'tpl_120_fpt');
 
   // Multi-variant state
   const createDefaultAnswerKey = (count: number, optCount: number, offset = 0): Record<number, BubbleOption> => {

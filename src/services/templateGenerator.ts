@@ -709,37 +709,63 @@ export function getTemplateRealStats(template: AnswerSheetTemplate): TemplateRea
  * Creates a clean default preset template
  */
 export function createDefaultTemplate(
-  id: string,
-  name: string,
-  numQuestions = 40,
+  id: string = 'tpl_120_fpt',
+  name: string = 'Phiếu 120 câu - FPT SCHOOLS',
+  numQuestions = 120,
   numOptions = 4,
   schoolName = 'FPT SCHOOLS',
   customColumnsCount?: number
 ): AnswerSheetTemplate {
   const cols = customColumnsCount ?? (numQuestions >= 60 ? 4 : numQuestions <= 25 ? 1 : 2);
-  const zones = generateAutoGridZones(numQuestions, numOptions, cols);
-
-  return {
+  
+  const { template } = generateDirectTemplateZonesAndData({
     id,
     name,
     schoolName,
-    version: '1.0',
+    showSchoolName: true,
+    departmentName: 'HỆ THỐNG GIÁO DỤC FPT',
+    showDepartmentName: true,
+    examTitle: 'BÀI THI TRẮC NGHIỆM ĐÁNH GIÁ NĂNG LỰC',
+    showExamTitle: true,
+    subjectName: 'Đánh giá năng lực tổng hợp',
+    showSubjectName: true,
+    durationMinutes: 90,
+    showDurationMinutes: true,
+    examDate: new Date().toISOString().split('T')[0],
+    showExamDate: true,
+    examClass: 'Khối 10 / THPT',
+    showExamClass: true,
+    roomNumber: 'P.01',
+    showRoomNumber: true,
     paperSize: 'A4',
     numQuestions,
     numOptions,
-    numIdDigits: 6,
-    numExamCodeDigits: 3,
+    columnsCount: cols,
+    direction: 'column_first',
     hasStudentIdBubbles: true,
+    numStudentIdDigits: 6,
     hasExamCodeBubbles: true,
+    numExamCodeDigits: 3,
     hasQrCode: true,
     hasAnchorMarks: true,
-    zones,
-    fillThreshold: 0.35,
-    uncertainThreshold: 0.18,
-    columnsCount: cols,
-    createdBy: 'System',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    showStudentInfoBox: true,
+    showStudentName: true,
+    showStudentDob: true,
+    showStudentSignature: true,
+    showTeacherScoreBox: true,
+    showInstructionsBox: true,
+    instructionsText: 'HƯỚNG DẪN TÔ ĐÁP ÁN: Dùng bút chì 2B tô tròn kín ô [●] Đúng  |  [○] [◐] [x] [✓] Sai  |  Tẩy sạch nếu muốn đổi đáp án',
+    customFields: [
+      { id: 'cf_1', label: 'Hội đồng thi', value: 'FPT SCHOOLS' }
+    ]
+  });
+
+  return {
+    ...template,
+    id,
+    name,
+    schoolName,
+    createdBy: 'FPT SCHOOLS',
     isSystemDefault: true
   };
 }

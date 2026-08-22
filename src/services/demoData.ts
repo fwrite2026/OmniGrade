@@ -41,11 +41,11 @@ export const DEFAULT_USERS: UserAccount[] = [
 ];
 
 export const DEFAULT_120_TEMPLATE: AnswerSheetTemplate = createDefaultTemplate(
-  'tpl_120_standard',
-  'Phiếu Trắc Nghiệm 120 Câu (A-D)',
+  'tpl_120_fpt',
+  'Phiếu 120 câu - FPT SCHOOLS',
   120,
   4,
-  'BỘ GIÁO DỤC & ĐÀO TẠO',
+  'FPT SCHOOLS',
   4
 );
 

@@ -118,7 +118,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [role, setRole] = useState<UserRole>('teacher');
 
   const [schoolName, setSchoolName] = useState<string>(() => {
-    return localStorage.getItem('omr_school_name') || 'TRƯỜNG PHỔ THÔNG';
+    return localStorage.getItem('omr_school_name') || 'FPT SCHOOLS';
   });
 
   const [templates, setTemplates] = useState<AnswerSheetTemplate[]>(() => {
@@ -126,8 +126,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (saved !== null) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // If the list exists, ensure standard template is upgraded to Phiếu 120 câu - FPT SCHOOLS if matching
+          const updatedList = parsed.map((t: AnswerSheetTemplate) => {
+            if (t.id === 'tpl_120_standard' || t.id === 'tpl_120_fpt') {
+              return {
+                ...DEFAULT_120_TEMPLATE,
+                ...t,
+                name: t.name.includes('FPT') ? t.name : 'Phiếu 120 câu - FPT SCHOOLS',
+                schoolName: t.schoolName || 'FPT SCHOOLS'
+              };
+            }
+            return t;
+          });
+          return updatedList;
         }
       } catch (e) {
         console.error('Error loading saved templates', e);
