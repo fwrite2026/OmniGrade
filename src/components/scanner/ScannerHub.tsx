@@ -22,7 +22,9 @@ import {
   Sparkles,
   FileText,
   Crosshair,
-  Maximize2
+  Maximize2,
+  SwitchCamera,
+  Flashlight
 } from 'lucide-react';
 
 interface ScannerHubProps {
@@ -43,12 +45,13 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
   const [showHudSectionFrames, setShowHudSectionFrames] = useState<boolean>(true);
   const [showHudAnchors, setShowHudAnchors] = useState<boolean>(true);
 
-  // Camera state
+  // Camera state & mobile facing mode
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
 
   // Selected Exam & Template
   const currentExam = activeExam || exams[0];
@@ -183,7 +186,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
     setIsCameraActive(false);
   };
 
-  const startCamera = async () => {
+  const startCamera = async (targetFacing: 'environment' | 'user' = facingMode) => {
     try {
       stopCamera(); // Ensure previous stream is cleanly stopped
       setCameraError(null);
@@ -191,24 +194,76 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
         setCameraError('Trình duyệt hoặc môi trường hiện tại không hỗ trợ camera trực tiếp. Vui lòng sử dụng tính năng "Tải tệp ảnh" hoặc "Chấm thử mẫu".');
         return;
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
-      });
+
+      let stream: MediaStream | null = null;
+      
+      // Tier 1: Try high resolution with desired facing mode
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: targetFacing },
+            width: { ideal: 1920, min: 640 },
+            height: { ideal: 1080, min: 480 }
+          },
+          audio: false
+        });
+      } catch (err1) {
+        console.warn('Tier 1 camera constraint failed, trying basic facingMode constraint:', err1);
+        // Tier 2: Try basic facing mode
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: targetFacing },
+            audio: false
+          });
+        } catch (err2) {
+          console.warn('Tier 2 camera constraint failed, fallback to any available video stream:', err2);
+          // Tier 3: Fallback to any default camera device
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+          });
+        }
+      }
+
+      if (!stream) {
+        throw new Error('Không thể khởi tạo luồng dữ liệu camera');
+      }
+
       streamRef.current = stream;
       setCameraStream(stream);
+      setIsCameraActive(true);
+
+      // Connect video stream immediately if element is already attached
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.play().catch(e => {
-          console.warn('Camera video play caught:', e);
+          console.warn('Camera video play caught in startCamera:', e);
         });
       }
-      setIsCameraActive(true);
     } catch (err: any) {
       console.error('Camera access failed:', err);
       setCameraError('Không thể kết nối máy ảnh. Vui lòng cấp quyền truy cập camera trong trình duyệt hoặc sử dụng chế độ Tải tệp ảnh.');
       stopCamera();
     }
   };
+
+  const toggleFacingMode = () => {
+    const nextMode = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextMode);
+    startCamera(nextMode);
+  };
+
+  // Sync cameraStream to videoRef whenever stream or active state updates
+  useEffect(() => {
+    if (videoRef.current && cameraStream && isCameraActive) {
+      if (videoRef.current.srcObject !== cameraStream) {
+        videoRef.current.srcObject = cameraStream;
+      }
+      videoRef.current.play().catch(e => {
+        console.warn('Camera play triggered in useEffect:', e);
+      });
+    }
+  }, [cameraStream, isCameraActive]);
 
   // 1. Camera Stream Lifecycle for activeTab (Switching between Upload / Camera / Demo tabs)
   useEffect(() => {
@@ -610,7 +665,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                   </button>
                 ) : (
                   <button
-                    onClick={startCamera}
+                    onClick={() => startCamera()}
                     className="px-3 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-1.5"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
@@ -626,7 +681,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                 <div className="flex-1">
                   <p className="font-bold mb-1">{cameraError}</p>
                   <button
-                    onClick={startCamera}
+                    onClick={() => startCamera()}
                     className="mt-2 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 rounded-xl text-xs font-semibold transition cursor-pointer"
                   >
                     Thử kết nối lại camera
@@ -645,7 +700,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                   </p>
                 </div>
                 <button
-                  onClick={startCamera}
+                  onClick={() => startCamera()}
                   className="px-5 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-cyan-500/20 transition cursor-pointer flex items-center gap-2"
                 >
                   <Camera className="w-4 h-4" />
@@ -653,14 +708,37 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                 </button>
               </div>
             ) : (
-              <div className="relative rounded-2xl overflow-hidden bg-black/90 border border-white/10 flex flex-col items-center justify-center min-h-[440px]">
+              <div className="relative rounded-2xl overflow-hidden bg-black border border-white/10 flex flex-col items-center justify-center min-h-[440px] w-full">
                 <video
-                  ref={videoRef}
+                  ref={(el) => {
+                    videoRef.current = el;
+                    if (el && cameraStream && el.srcObject !== cameraStream) {
+                      el.srcObject = cameraStream;
+                      el.play().catch(() => {});
+                    }
+                  }}
                   autoPlay
                   playsInline
                   muted
-                  className="w-full max-h-[540px] object-cover"
+                  onLoadedMetadata={(e) => {
+                    const vid = e.target as HTMLVideoElement;
+                    vid.play().catch(err => console.warn('Video play onLoadedMetadata:', err));
+                  }}
+                  className="w-full h-full min-h-[400px] max-h-[580px] object-cover bg-black block"
                 />
+
+                {/* Top Control Bar for Camera Mode */}
+                <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={toggleFacingMode}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-black/80 hover:bg-black/95 text-cyan-300 hover:text-white border border-cyan-500/30 rounded-xl text-xs font-semibold backdrop-blur-md shadow-lg transition cursor-pointer"
+                    title="Chuyển đổi giữa Camera Sau và Camera Trước"
+                  >
+                    <SwitchCamera className="w-4 h-4 text-cyan-400" />
+                    <span className="hidden sm:inline">{facingMode === 'environment' ? 'Camera Sau' : 'Camera Trước'}</span>
+                  </button>
+                </div>
 
                 {/* Viewfinder Guide Overlay with Dynamic Anchors & 3 Section Frames */}
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-3 sm:p-5">
@@ -793,13 +871,22 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                   </div>
                 </div>
 
-                {/* Floating Capture Button */}
+                {/* Floating Bottom Action Bar */}
                 <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={toggleFacingMode}
+                    className="p-3 bg-black/80 hover:bg-black text-cyan-300 hover:text-white border border-cyan-500/30 rounded-full shadow-lg backdrop-blur-md transition cursor-pointer"
+                    title="Chuyển Camera Trước / Sau"
+                  >
+                    <SwitchCamera className="w-5 h-5" />
+                  </button>
+
                   <button
                     id="btn-capture-camera"
                     onClick={handleCaptureCamera}
                     disabled={isProcessing}
-                    className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-sm rounded-full shadow-lg shadow-emerald-500/25 hover:scale-105 active:scale-95 transition cursor-pointer"
+                    className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-sm rounded-full shadow-lg shadow-emerald-500/25 hover:scale-105 active:scale-95 transition cursor-pointer whitespace-nowrap"
                   >
                     <Camera className="w-5 h-5" />
                     <span>{t.scanner.captureButton}</span>

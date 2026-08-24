@@ -52,25 +52,22 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
     setIsLoading(true);
 
-    setTimeout(() => {
-      const res = login(cleanUsername, cleanPassword);
-      setIsLoading(false);
+    // Immediate login execution without artificial lag
+    const res = login(cleanUsername, cleanPassword);
+    setIsLoading(false);
 
-      if (res.success) {
-        setSuccessMsg('Đăng nhập thành công! Đang chuyển hướng vào hệ thống...');
-        setTimeout(() => {
-          if (onLoginSuccess) {
-            onLoginSuccess();
-          }
-        }, 400);
-      } else {
-        setErrorMsg(res.message || 'Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin tài khoản!');
+    if (res.success) {
+      setSuccessMsg('Đăng nhập thành công! Đang chuyển hướng...');
+      if (onLoginSuccess) {
+        onLoginSuccess();
       }
-    }, 200);
+    } else {
+      setErrorMsg(res.message || 'Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin tài khoản!');
+    }
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#02050A] text-slate-100 flex flex-col justify-between relative overflow-hidden font-sans select-none">
+    <div className="min-h-screen w-full bg-[#02050A] text-slate-100 flex flex-col justify-between relative overflow-hidden font-sans">
       {/* Background ambient lighting effects */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
         <div className="absolute -top-32 left-1/4 w-[500px] h-[500px] bg-blue-600/15 rounded-full blur-[120px]" />

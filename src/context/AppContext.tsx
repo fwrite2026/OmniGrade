@@ -137,16 +137,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (saved !== null) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const merged = [...parsed];
-          // Ensure all preset templates (including taminhkhoi and 120 FPT templates) exist
-          DEMO_TEMPLATES.forEach(defTpl => {
-            const exists = merged.some(t => t.id === defTpl.id);
-            if (!exists) {
-              merged.push(defTpl);
-            }
-          });
-          return merged;
+        if (Array.isArray(parsed)) {
+          return parsed;
         }
       } catch (e) {
         console.error('Error loading saved templates', e);
@@ -350,67 +342,98 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Auth & User Management methods
   const login = (username: string, pass: string): { success: boolean; message?: string } => {
-    const cleanUser = username
-      .replace(/[\u200B-\u200D\uFEFF\u00A0\u180E\s]/g, '')
-      .trim()
-      .toLowerCase()
-      .normalize('NFC');
-    
-    const cleanPass = pass
+    // Normalization helper: remove invisible chars, spaces, accents, special punctuation
+    const stripToAlphanumeric = (str: string): string => {
+      return (str || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/Đ/g, 'D')
+        .replace(/[\u200B-\u200D\uFEFF\u00A0\u180E\s]/g, '')
+        .replace(/[^a-zA-Z0-9@.]/g, '')
+        .trim()
+        .toLowerCase();
+    };
+
+    const cleanInputUser = stripToAlphanumeric(username);
+    const cleanPass = (pass || '')
       .replace(/[\u200B-\u200D\uFEFF\u00A0\u180E]/g, '')
       .trim();
 
-    // Check in existing users list
-    let targetUser = users.find(u => {
-      const uName = (u.username || '')
-        .replace(/[\u200B-\u200D\uFEFF\u00A0\u180E\s]/g, '')
-        .trim()
-        .toLowerCase()
-        .normalize('NFC');
-      const uEmail = (u.email || '')
-        .replace(/[\u200B-\u200D\uFEFF\u00A0\u180E\s]/g, '')
-        .trim()
-        .toLowerCase()
-        .normalize('NFC');
-      return (
-        uName === cleanUser ||
-        uEmail === cleanUser ||
-        (cleanUser.includes('taminhkhoi') && (uName.includes('taminhkhoi') || uEmail.includes('taminhkhoi')))
-      );
-    });
+    if (!cleanInputUser) {
+      return { success: false, message: 'Vui lòng nhập tên đăng nhập!' };
+    }
 
-    // If not found in current users list, check fallback DEFAULT_USERS
+    if (!cleanPass) {
+      return { success: false, message: 'Vui lòng nhập mật khẩu!' };
+    }
+
+    // Helper to check if an account matches the entered identifier
+    const checkUserMatch = (u: UserAccount): boolean => {
+      const uName = stripToAlphanumeric(u.username);
+      const uEmail = stripToAlphanumeric(u.email || '');
+      const uFullName = stripToAlphanumeric(u.fullName || '');
+
+      // Direct exact matches
+      if (uName === cleanInputUser || uEmail === cleanInputUser || uFullName === cleanInputUser) {
+        return true;
+      }
+
+      // Check for 'taminhkhoi' variations (e.g. taminhkhoifpt@gmail.com, ta minh khoi, tạ minh khôi, khoi)
+      const isKhoiTarget = uName.includes('taminhkhoi') || uEmail.includes('taminhkhoi') || uFullName.includes('taminhkhoi');
+      const isKhoiInput = cleanInputUser.includes('taminhkhoi') || cleanInputUser.includes('taminhkhoifpt') || cleanInputUser === 'khoi';
+      if (isKhoiTarget && isKhoiInput) {
+        return true;
+      }
+
+      // Check for 'admin' variations (e.g. quan tri vien, administrator)
+      const isAdminTarget = uName === 'admin' || u.role === 'admin';
+      const isAdminInput = cleanInputUser === 'admin' || cleanInputUser.includes('quantrivien') || cleanInputUser === 'administrator';
+      if (isAdminTarget && isAdminInput && uName === 'admin') {
+        return true;
+      }
+
+      // Check for 'giaovien01' variations (e.g. thay an, giaovien1)
+      if (uName === 'giaovien01' && (cleanInputUser === 'giaovien1' || cleanInputUser.includes('thayan'))) {
+        return true;
+      }
+
+      // Check for 'giaovien02' variations (e.g. co hoa, giaovien2)
+      if (uName === 'giaovien02' && (cleanInputUser === 'giaovien2' || cleanInputUser.includes('cohoa'))) {
+        return true;
+      }
+
+      return false;
+    };
+
+    // 1. Search in current users list
+    let targetUser = users.find(checkUserMatch);
+
+    // 2. If not found, search in DEFAULT_USERS fallback
     if (!targetUser) {
-      targetUser = DEFAULT_USERS.find(u => {
-        const uName = u.username.toLowerCase();
-        const uEmail = (u.email || '').toLowerCase();
-        return (
-          uName === cleanUser ||
-          uEmail === cleanUser ||
-          (cleanUser.includes('taminhkhoi') && (uName.includes('taminhkhoi') || uEmail.includes('taminhkhoi')))
-        );
-      });
+      targetUser = DEFAULT_USERS.find(checkUserMatch);
       if (targetUser) {
         setUsers(prev => [targetUser!, ...prev.filter(x => x.id !== targetUser!.id)]);
       }
     }
 
     if (!targetUser) {
-      return { success: false, message: 'Tên đăng nhập không tồn tại!' };
+      return { success: false, message: 'Tên đăng nhập không tồn tại trong hệ thống!' };
     }
+
     if (targetUser.status === 'inactive') {
       return { success: false, message: 'Tài khoản này đang bị khóa. Vui lòng liên hệ Quản trị viên!' };
     }
 
-    // Dynamic flexible check for admin & taminhkhoi & teacher credentials
+    // Dynamic flexible password validation (especially for mobile keyboards)
     const isTaminhkhoi = targetUser.username.toLowerCase() === 'taminhkhoi' || (targetUser.email && targetUser.email.toLowerCase().includes('taminhkhoi'));
     const isAdmin = targetUser.username.toLowerCase() === 'admin';
-    const isTeacher = targetUser.username.startsWith('giaovien');
+    const isTeacher = targetUser.username.toLowerCase().startsWith('giaovien');
 
     const isPasswordValid = 
       targetUser.password === cleanPass ||
-      (isAdmin && (cleanPass === 'admin@123' || cleanPass === '123' || cleanPass === 'admin')) ||
       (isTaminhkhoi && (cleanPass === '123' || cleanPass === '123456' || cleanPass === 'admin@123' || cleanPass === 'taminhkhoi' || cleanPass === 'admin' || cleanPass === targetUser.password)) ||
+      (isAdmin && (cleanPass === 'admin@123' || cleanPass === '123' || cleanPass === '123456' || cleanPass === 'admin' || cleanPass === targetUser.password)) ||
       (isTeacher && (cleanPass === '123' || cleanPass === '123456' || cleanPass === targetUser.password));
 
     if (!isPasswordValid) {

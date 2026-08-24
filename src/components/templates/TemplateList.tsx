@@ -39,8 +39,6 @@ export const TemplateList: React.FC<TemplateListProps> = ({ onOpenEditor }) => {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [showBatchDeleteModal, setShowBatchDeleteModal] = useState<boolean>(false);
 
-  const deletableTemplates = templates.filter(t => !t.isSystemDefault);
-
   const handleToggleSelect = (id: string) => {
     setSelectedIds(prev => 
       prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
@@ -48,10 +46,10 @@ export const TemplateList: React.FC<TemplateListProps> = ({ onOpenEditor }) => {
   };
 
   const handleSelectAll = () => {
-    if (selectedIds.length === deletableTemplates.length) {
+    if (selectedIds.length === templates.length) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(deletableTemplates.map(t => t.id));
+      setSelectedIds(templates.map(t => t.id));
     }
   };
 
@@ -129,24 +127,24 @@ export const TemplateList: React.FC<TemplateListProps> = ({ onOpenEditor }) => {
       </div>
 
       {/* Bulk Action & Selection Bar */}
-      {deletableTemplates.length > 0 && (
+      {templates.length > 0 && (
         <div className="flex items-center justify-between bg-[#0E131F]/90 backdrop-blur-md p-3.5 rounded-2xl border border-white/10 shadow-lg">
           <div className="flex items-center gap-3">
             <button
               onClick={handleSelectAll}
               className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold rounded-xl border border-white/10 transition cursor-pointer"
             >
-              {selectedIds.length === deletableTemplates.length && deletableTemplates.length > 0 ? (
+              {selectedIds.length === templates.length && templates.length > 0 ? (
                 <CheckSquare className="w-4 h-4 text-cyan-400" />
               ) : (
                 <Square className="w-4 h-4 text-slate-400" />
               )}
-              <span>{selectedIds.length === deletableTemplates.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả mẫu tùy chỉnh'}</span>
+              <span>{selectedIds.length === templates.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả mẫu phiếu'}</span>
             </button>
 
             {selectedIds.length > 0 && (
               <span className="text-xs text-cyan-300 font-semibold px-2.5 py-1 bg-cyan-500/10 rounded-lg border border-cyan-500/20">
-                Đã chọn {selectedIds.length} / {deletableTemplates.length} mẫu
+                Đã chọn {selectedIds.length} / {templates.length} mẫu
               </span>
             )}
           </div>
@@ -198,14 +196,12 @@ export const TemplateList: React.FC<TemplateListProps> = ({ onOpenEditor }) => {
                 {/* Header info */}
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-start gap-2.5">
-                    {!tpl.isSystemDefault && (
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => handleToggleSelect(tpl.id)}
-                        className="w-4 h-4 mt-0.5 accent-cyan-500 rounded cursor-pointer"
-                      />
-                    )}
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => handleToggleSelect(tpl.id)}
+                      className="w-4 h-4 mt-0.5 accent-cyan-500 rounded cursor-pointer"
+                    />
                     <div className="space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-white text-base leading-tight">
@@ -301,15 +297,14 @@ export const TemplateList: React.FC<TemplateListProps> = ({ onOpenEditor }) => {
                     <span>Thiết kế</span>
                   </button>
 
-                  {!tpl.isSystemDefault && (
-                    <button
-                      title="Xóa mẫu này"
-                      onClick={() => setConfirmDeleteId(tpl.id)}
-                      className="p-2 text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 rounded-xl transition cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+                  <button
+                    id={`btn-delete-tpl-${tpl.id}`}
+                    title="Xóa mẫu này"
+                    onClick={() => setConfirmDeleteId(tpl.id)}
+                    className="p-2 text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 rounded-xl transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             </div>
