@@ -27,18 +27,32 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
+  const cleanInput = (str: string) => {
+    return str
+      .replace(/[\u200B-\u200D\uFEFF\u00A0\u180E]/g, '') // remove zero-width & non-breaking spaces
+      .trim();
+  };
+
+  const handleQuickFill = (u: string, p: string) => {
+    setUsername(u);
+    setPassword(p);
+    setErrorMsg(null);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    const cleanUsername = username.trim();
+    const cleanUsername = cleanInput(username);
+    const cleanPassword = password.trim();
+
     if (!cleanUsername) {
       setErrorMsg('Vui lòng nhập tên đăng nhập!');
       return;
     }
 
-    if (!password) {
+    if (!cleanPassword) {
       setErrorMsg('Vui lòng nhập mật khẩu!');
       return;
     }
@@ -46,7 +60,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     setIsLoading(true);
 
     setTimeout(() => {
-      const res = login(cleanUsername, password);
+      const res = login(cleanUsername, cleanPassword);
       setIsLoading(false);
 
       if (res.success) {
@@ -55,11 +69,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
           if (onLoginSuccess) {
             onLoginSuccess();
           }
-        }, 500);
+        }, 400);
       } else {
         setErrorMsg(res.message || 'Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin tài khoản!');
       }
-    }, 250);
+    }, 200);
   };
 
   return (
@@ -140,9 +154,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Nhập tên đăng nhập"
+                  placeholder="Nhập tên đăng nhập (vd: admin, giaovien01)"
                   required
                   autoFocus
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoComplete="username"
                   className="w-full pl-10 pr-4 py-3 bg-white/5 border border-white/10 rounded-2xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition"
                 />
               </div>
@@ -164,6 +182,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Nhập mật khẩu"
                   required
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoComplete="current-password"
                   className="w-full pl-10 pr-11 py-3 bg-white/5 border border-white/10 rounded-2xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition"
                 />
                 <button
@@ -173,6 +195,43 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   tabIndex={-1}
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Test Accounts for 1-tap fill on mobile/desktop */}
+            <div className="p-3 bg-white/5 rounded-2xl border border-white/5 space-y-2">
+              <p className="text-[11px] text-slate-400 font-semibold flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Nhấn để chọn nhanh tài khoản đăng nhập:</span>
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleQuickFill('admin', 'admin@123')}
+                  className="flex items-center justify-between p-2 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 text-left transition cursor-pointer group"
+                >
+                  <div>
+                    <p className="text-xs font-bold text-purple-300">admin</p>
+                    <p className="text-[10px] text-slate-400">Quản trị viên</p>
+                  </div>
+                  <span className="text-[10px] font-mono text-purple-400 px-1.5 py-0.5 rounded bg-purple-950/60 border border-purple-500/30">
+                    admin@123
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickFill('giaovien01', '123')}
+                  className="flex items-center justify-between p-2 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 text-left transition cursor-pointer group"
+                >
+                  <div>
+                    <p className="text-xs font-bold text-cyan-300">giaovien01</p>
+                    <p className="text-[10px] text-slate-400">Thầy An (Toán)</p>
+                  </div>
+                  <span className="text-[10px] font-mono text-cyan-400 px-1.5 py-0.5 rounded bg-cyan-950/60 border border-cyan-500/30">
+                    123
+                  </span>
                 </button>
               </div>
             </div>

@@ -104,7 +104,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (saved !== null) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Ensure default admin always exists if somehow omitted
+          const hasAdmin = parsed.some((u: UserAccount) => u.username.toLowerCase() === 'admin');
+          if (!hasAdmin) {
+            return [...DEFAULT_USERS, ...parsed];
+          }
           return parsed;
         }
       } catch (e) {
@@ -344,15 +349,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Auth & User Management methods
   const login = (username: string, pass: string): { success: boolean; message?: string } => {
-    const cleanUser = username.trim().toLowerCase();
-    const targetUser = users.find(u => u.username.toLowerCase() === cleanUser);
+    const cleanUser = username
+      .replace(/[\u200B-\u200D\uFEFF\u00A0\u180E]/g, '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFC');
+    
+    const targetUser = users.find(u => {
+      const uName = (u.username || '')
+        .replace(/[\u200B-\u200D\uFEFF\u00A0\u180E]/g, '')
+        .trim()
+        .toLowerCase()
+        .normalize('NFC');
+      return uName === cleanUser;
+    });
+
     if (!targetUser) {
       return { success: false, message: 'Tên đăng nhập không tồn tại!' };
     }
     if (targetUser.status === 'inactive') {
       return { success: false, message: 'Tài khoản này đang bị khóa. Vui lòng liên hệ Quản trị viên!' };
     }
-    if (targetUser.password !== pass) {
+    if (targetUser.password !== pass.trim()) {
       return { success: false, message: 'Mật khẩu không chính xác!' };
     }
     const updatedUser: UserAccount = {

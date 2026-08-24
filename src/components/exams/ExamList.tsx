@@ -23,14 +23,16 @@ import {
   Globe,
   Users,
   Share2,
-  UserCheck
+  UserCheck,
+  Edit3
 } from 'lucide-react';
 
 interface ExamListProps {
   onNavigate: (tab: NavTab) => void;
+  onEditExam?: (examId: string) => void;
 }
 
-export const ExamList: React.FC<ExamListProps> = ({ onNavigate }) => {
+export const ExamList: React.FC<ExamListProps> = ({ onNavigate, onEditExam }) => {
   const { 
     t, 
     exams, 
@@ -380,6 +382,18 @@ export const ExamList: React.FC<ExamListProps> = ({ onNavigate }) => {
                     <Printer className="w-3.5 h-3.5 text-cyan-400" />
                     <span>{t.actions.print}</span>
                   </button>
+
+                  {onEditExam && (
+                    <button
+                      id={`btn-edit-exam-${exam.id}`}
+                      onClick={() => onEditExam(exam.id)}
+                      title="Chỉnh sửa cấu hình, mã đề và đáp án"
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-semibold text-xs rounded-xl border border-amber-500/20 transition cursor-pointer"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      <span>Chỉnh sửa</span>
+                    </button>
+                  )}
 
                   <button
                     id={`btn-results-exam-${exam.id}`}

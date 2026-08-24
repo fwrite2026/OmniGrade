@@ -21,6 +21,7 @@ import { LoginModal } from './components/auth/LoginModal';
 const MainLayout: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [editingTemplateId, setEditingTemplateId] = useState<string | undefined>(undefined);
+  const [editingExamId, setEditingExamId] = useState<string | undefined>(undefined);
   const { currentUser } = useApp();
 
   // Show full-screen Login Page if not authenticated
@@ -38,6 +39,28 @@ const MainLayout: React.FC = () => {
     setActiveTab('templates');
   };
 
+  const handleSelectTab = (tab: NavTab) => {
+    if (tab === 'createExam') {
+      setEditingExamId(undefined); // create new
+    }
+    setActiveTab(tab);
+  };
+
+  const handleEditExam = (examId: string) => {
+    setEditingExamId(examId);
+    setActiveTab('createExam');
+  };
+
+  const handleFinishExamWizard = () => {
+    setEditingExamId(undefined);
+    setActiveTab('exams');
+  };
+
+  const handleCancelExamWizard = () => {
+    setEditingExamId(undefined);
+    setActiveTab('exams');
+  };
+
   return (
     <div className="min-h-screen bg-[#02050A] text-slate-100 flex flex-col font-sans antialiased selection:bg-cyan-500 selection:text-white relative">
       {/* Subtle ambient lighting effect in the background */}
@@ -48,18 +71,18 @@ const MainLayout: React.FC = () => {
       </div>
 
       {/* Top Header */}
-      <Header onNavigate={(tab) => setActiveTab(tab as NavTab)} />
+      <Header onNavigate={(tab) => handleSelectTab(tab as NavTab)} />
 
       {/* Main Body */}
       <div className="flex flex-1 overflow-hidden relative z-10">
         {/* Sidebar */}
-        <Sidebar currentTab={activeTab} onSelectTab={setActiveTab} />
+        <Sidebar currentTab={activeTab} onSelectTab={handleSelectTab} />
 
         {/* Dynamic View Canvas */}
         <main className="flex-1 overflow-y-auto min-h-[calc(100vh-64px)] pb-12 p-4 md:p-8">
-          <ErrorBoundary key={activeTab} onReset={() => setActiveTab('dashboard')}>
+          <ErrorBoundary key={`${activeTab}_${editingExamId || ''}`} onReset={() => setActiveTab('dashboard')}>
             {activeTab === 'dashboard' && (
-              <Dashboard onNavigate={setActiveTab} />
+              <Dashboard onNavigate={handleSelectTab} />
             )}
 
             {activeTab === 'templates' && (
@@ -74,18 +97,20 @@ const MainLayout: React.FC = () => {
             )}
 
             {activeTab === 'exams' && (
-              <ExamList onNavigate={setActiveTab} />
+              <ExamList onNavigate={handleSelectTab} onEditExam={handleEditExam} />
             )}
 
             {activeTab === 'createExam' && (
               <ExamWizard
-                onFinish={() => setActiveTab('exams')}
-                onCancel={() => setActiveTab('exams')}
+                key={editingExamId || 'new_exam'}
+                initialExamId={editingExamId}
+                onFinish={handleFinishExamWizard}
+                onCancel={handleCancelExamWizard}
               />
             )}
 
             {activeTab === 'scanner' && (
-              <ScannerHub onNavigate={setActiveTab} />
+              <ScannerHub onNavigate={handleSelectTab} />
             )}
 
             {activeTab === 'review' && (
@@ -109,7 +134,7 @@ const MainLayout: React.FC = () => {
             )}
 
             {activeTab === 'settings' && (
-              <SettingsView onNavigate={(tab) => setActiveTab(tab as NavTab)} />
+              <SettingsView onNavigate={(tab) => handleSelectTab(tab as NavTab)} />
             )}
           </ErrorBoundary>
         </main>

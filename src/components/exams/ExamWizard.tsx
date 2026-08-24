@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 
 interface ExamWizardProps {
+  initialExamId?: string;
   onFinish: () => void;
   onCancel: () => void;
 }
@@ -30,42 +31,15 @@ interface WizardVariant {
   answerKeyMap: Record<number, BubbleOption>;
 }
 
-export const ExamWizard: React.FC<ExamWizardProps> = ({ onFinish, onCancel }) => {
-  const { t, templates, classes, addExam, schoolName, currentUser } = useApp();
+export const ExamWizard: React.FC<ExamWizardProps> = ({ initialExamId, onFinish, onCancel }) => {
+  const { t, exams, templates, classes, addExam, updateExam, schoolName, currentUser } = useApp();
+
+  const existingExam = initialExamId ? exams.find(e => e.id === initialExamId) : undefined;
+  const isEditing = !!existingExam;
 
   const [currentStep, setCurrentStep] = useState<number>(1);
 
-  // Form State
-  const [title, setTitle] = useState<string>('');
-  const [subject, setSubject] = useState<string>('Tiếng Anh');
-  const [grade, setGrade] = useState<string>('6');
-  const [className, setClassName] = useState<string>(classes[0]?.name || '6A1');
-  const [academicYear, setAcademicYear] = useState<string>('2025-2026');
-  const [semester, setSemester] = useState<string>('Học kỳ I');
-  const [examType, setExamType] = useState<Exam['examType']>('midterm');
-  const [examCode, setExamCode] = useState<string>(`EXAM-${Math.floor(100 + Math.random() * 900)}`);
-  const [examDate, setExamDate] = useState<string>(new Date().toISOString().slice(0, 10));
-  const [durationMinutes, setDurationMinutes] = useState<number>(45);
-  const [teacherName, setTeacherName] = useState<string>(
-    currentUser?.fullName || (currentUser?.role === 'admin' ? 'Quản trị viên' : 'Giáo viên')
-  );
-
-  // Sharing & Scope State (Admin default = school_wide, shared with all teachers)
-  const isAdmin = currentUser?.role === 'admin';
-  const [isSharedWithAllTeachers, setIsSharedWithAllTeachers] = useState<boolean>(true);
-  const [targetScope, setTargetScope] = useState<'school_wide' | 'grade_wide' | 'class_only'>(
-    isAdmin ? 'school_wide' : 'class_only'
-  );
-
-  const [numQuestions, setNumQuestions] = useState<number>(40);
-  const [numOptions, setNumOptions] = useState<number>(4);
-  const [maxScore, setMaxScore] = useState<number>(10);
-  const [passingScore, setPassingScore] = useState<number>(5.0);
-  const [decimalPrecision, setDecimalPrecision] = useState<0 | 1 | 2>(2);
-  const [instructions, setInstructions] = useState<string>('Dùng bút chì 2B tô kín ô tròn tương ứng với đáp án đúng.');
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(templates[0]?.id || 'tpl_120_fpt');
-
-  // Multi-variant state
+  // Helper for default keys
   const createDefaultAnswerKey = (count: number, optCount: number, offset = 0): Record<number, BubbleOption> => {
     const map: Record<number, BubbleOption> = {};
     const defaultCycle: BubbleOption[] = ['A', 'B', 'C', 'D', 'E'].slice(0, optCount) as BubbleOption[];
@@ -75,33 +49,109 @@ export const ExamWizard: React.FC<ExamWizardProps> = ({ onFinish, onCancel }) =>
     return map;
   };
 
-  const [variants, setVariants] = useState<WizardVariant[]>([
-    {
-      id: 'var_101',
-      code: '101',
-      title: 'Mã đề 101',
-      answerKeyMap: createDefaultAnswerKey(40, 4, 0)
-    },
-    {
-      id: 'var_102',
-      code: '102',
-      title: 'Mã đề 102',
-      answerKeyMap: createDefaultAnswerKey(40, 4, 1)
-    },
-    {
-      id: 'var_103',
-      code: '103',
-      title: 'Mã đề 103',
-      answerKeyMap: createDefaultAnswerKey(40, 4, 2)
-    },
-    {
-      id: 'var_104',
-      code: '104',
-      title: 'Mã đề 104',
-      answerKeyMap: createDefaultAnswerKey(40, 4, 3)
-    }
-  ]);
+  // Form State
+  const [title, setTitle] = useState<string>(existingExam?.title || '');
+  const [subject, setSubject] = useState<string>(existingExam?.subject || 'Tiếng Anh');
+  const [grade, setGrade] = useState<string>(existingExam?.grade || '6');
+  const [className, setClassName] = useState<string>(existingExam?.className || classes[0]?.name || '6A1');
+  const [academicYear, setAcademicYear] = useState<string>(existingExam?.academicYear || '2025-2026');
+  const [semester, setSemester] = useState<string>(existingExam?.semester || 'Học kỳ I');
+  const [examType, setExamType] = useState<Exam['examType']>(existingExam?.examType || 'midterm');
+  const [examCode, setExamCode] = useState<string>(
+    existingExam?.code || `EXAM-${Math.floor(100 + Math.random() * 900)}`
+  );
+  const [examDate, setExamDate] = useState<string>(
+    existingExam?.examDate || new Date().toISOString().slice(0, 10)
+  );
+  const [durationMinutes, setDurationMinutes] = useState<number>(existingExam?.durationMinutes || 45);
+  const [teacherName, setTeacherName] = useState<string>(
+    existingExam?.teacherName || currentUser?.fullName || (currentUser?.role === 'admin' ? 'Quản trị viên' : 'Giáo viên')
+  );
 
+  // Sharing & Scope State (Admin default = school_wide, shared with all teachers)
+  const isAdmin = currentUser?.role === 'admin';
+  const [isSharedWithAllTeachers, setIsSharedWithAllTeachers] = useState<boolean>(
+    existingExam ? (existingExam.isSharedWithAllTeachers ?? true) : true
+  );
+  const [targetScope, setTargetScope] = useState<'school_wide' | 'grade_wide' | 'class_only'>(
+    existingExam?.targetScope || (isAdmin ? 'school_wide' : 'class_only')
+  );
+
+  const [numQuestions, setNumQuestions] = useState<number>(existingExam?.numQuestions || 40);
+  const [numOptions, setNumOptions] = useState<number>(existingExam?.numOptions || 4);
+  const [maxScore, setMaxScore] = useState<number>(existingExam?.maxScore || 10);
+  const [passingScore, setPassingScore] = useState<number>(existingExam?.passingScore || 5.0);
+  const [decimalPrecision, setDecimalPrecision] = useState<0 | 1 | 2>(
+    existingExam?.decimalPrecision ?? 2
+  );
+  const [instructions, setInstructions] = useState<string>(
+    existingExam?.instructions || 'Dùng bút chì 2B tô kín ô tròn tương ứng với đáp án đúng.'
+  );
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(
+    existingExam?.templateId || templates[0]?.id || 'tpl_120_fpt'
+  );
+
+  // Multi-variant state initialization
+  const initialVariants = (): WizardVariant[] => {
+    if (existingExam?.variants && existingExam.variants.length > 0) {
+      return existingExam.variants.map(v => {
+        let keyMap: Record<number, BubbleOption> = { ...(v.answerKeyMap || {}) };
+        if (Object.keys(keyMap).length === 0 && v.questions) {
+          v.questions.forEach(q => {
+            keyMap[q.questionNumber] = q.correctAnswer;
+          });
+        }
+        return {
+          id: v.id,
+          code: v.code,
+          title: v.title || `Mã đề ${v.code}`,
+          answerKeyMap: keyMap
+        };
+      });
+    }
+
+    if (existingExam?.questions && existingExam.questions.length > 0) {
+      const map: Record<number, BubbleOption> = {};
+      existingExam.questions.forEach(q => {
+        map[q.questionNumber] = q.correctAnswer;
+      });
+      return [{
+        id: 'var_' + (existingExam.code || '101'),
+        code: existingExam.code || '101',
+        title: `Mã đề ${existingExam.code || '101'}`,
+        answerKeyMap: map
+      }];
+    }
+
+    return [
+      {
+        id: 'var_101',
+        code: '101',
+        title: 'Mã đề 101',
+        answerKeyMap: createDefaultAnswerKey(40, 4, 0)
+      },
+      {
+        id: 'var_102',
+        code: '102',
+        title: 'Mã đề 102',
+        answerKeyMap: createDefaultAnswerKey(40, 4, 1)
+      },
+      {
+        id: 'var_103',
+        code: '103',
+        title: 'Mã đề 103',
+        answerKeyMap: createDefaultAnswerKey(40, 4, 2)
+      },
+      {
+        id: 'var_104',
+        code: '104',
+        title: 'Mã đề 104',
+        answerKeyMap: createDefaultAnswerKey(40, 4, 3)
+      }
+    ];
+  };
+
+  const [variants, setVariants] = useState<WizardVariant[]>(initialVariants);
   const [activeVariantId, setActiveVariantId] = useState<string>(variants[0]?.id || 'var_101');
   const [newVariantCodeInput, setNewVariantCodeInput] = useState<string>('');
   const [showAddVariantModal, setShowAddVariantModal] = useState<boolean>(false);
@@ -227,69 +277,119 @@ export const ExamWizard: React.FC<ExamWizardProps> = ({ onFinish, onCancel }) =>
   // Compatibility warning
   const isTemplateCompatible = selectedTemplate && selectedTemplate.numQuestions >= numQuestions;
 
-  // Complete and publish exam
+  // Complete and publish/update exam
   const handlePublish = () => {
-    const pointPerQ = Number((maxScore / numQuestions).toFixed(3));
-    
-    // Build QuestionConfig[] for all variants
-    const builtVariants: ExamVariant[] = variants.map(v => {
-      const qList: QuestionConfig[] = [];
-      for (let i = 1; i <= numQuestions; i++) {
-        qList.push({
-          questionNumber: i,
-          correctAnswer: v.answerKeyMap[i] || 'A',
-          points: pointPerQ,
-          difficulty: (i % 3 === 0) ? 'easy' : (i % 3 === 1) ? 'medium' : 'hard'
-        });
+    try {
+      const qCount = Number(numQuestions) || 40;
+      const optCount = Number(numOptions) || 4;
+      const mScore = Number(maxScore) || 10;
+      const pointPerQ = qCount > 0 ? Number((mScore / qCount).toFixed(3)) : 0.25;
+      
+      // Fallback if variants is empty
+      const safeVariantsList = variants.length > 0 ? variants : [
+        {
+          id: 'var_101',
+          code: '101',
+          title: 'Mã đề 101',
+          answerKeyMap: createDefaultAnswerKey(qCount, optCount, 0)
+        }
+      ];
+
+      // Build QuestionConfig[] for all variants
+      const builtVariants: ExamVariant[] = safeVariantsList.map(v => {
+        const qList: QuestionConfig[] = [];
+        for (let i = 1; i <= qCount; i++) {
+          qList.push({
+            questionNumber: i,
+            correctAnswer: v.answerKeyMap?.[i] || 'A',
+            points: pointPerQ,
+            difficulty: (i % 3 === 0) ? 'easy' : (i % 3 === 1) ? 'medium' : 'hard'
+          });
+        }
+        return {
+          id: v.id || ('var_' + Math.random().toString(36).slice(2, 8)),
+          code: v.code || '101',
+          title: v.title || `Mã đề ${v.code || '101'}`,
+          questions: qList,
+          answerKeyMap: v.answerKeyMap || {}
+        };
+      });
+
+      const primaryVariant = builtVariants[0];
+      const finalTemplateId = selectedTemplateId || selectedTemplate?.id || templates[0]?.id || 'tpl_120_fpt';
+
+      if (existingExam) {
+        const updatedExam: Exam = {
+          ...existingExam,
+          code: primaryVariant.code || examCode,
+          title: title.trim() || `${subject} - ${targetScope === 'school_wide' ? 'Toàn Trường' : targetScope === 'grade_wide' ? `Khối ${grade}` : `Lớp ${className}`}`,
+          subject,
+          grade,
+          className: targetScope === 'school_wide' ? 'Toàn trường' : targetScope === 'grade_wide' ? `Khối ${grade}` : className,
+          academicYear,
+          semester,
+          examType,
+          examDate,
+          durationMinutes: Number(durationMinutes) || 45,
+          teacherName: teacherName || (currentUser?.fullName || 'Giáo viên'),
+          numQuestions: qCount,
+          numOptions: optCount,
+          maxScore: mScore,
+          passingScore: Number(passingScore) || 5,
+          decimalPrecision,
+          templateId: finalTemplateId,
+          questions: primaryVariant.questions,
+          variants: builtVariants,
+          defaultVariantCode: primaryVariant.code,
+          instructions,
+          updatedAt: new Date().toISOString(),
+          targetScope,
+          isSharedWithAllTeachers: isSharedWithAllTeachers || isAdmin
+        };
+        updateExam(updatedExam);
+      } else {
+        const newExam: Exam = {
+          id: 'exam_' + Math.random().toString(36).slice(2, 9),
+          code: primaryVariant.code || examCode,
+          title: title.trim() || `${subject} - ${targetScope === 'school_wide' ? 'Toàn Trường' : targetScope === 'grade_wide' ? `Khối ${grade}` : `Lớp ${className}`}`,
+          subject,
+          grade,
+          className: targetScope === 'school_wide' ? 'Toàn trường' : targetScope === 'grade_wide' ? `Khối ${grade}` : className,
+          academicYear,
+          semester,
+          examType,
+          examDate,
+          durationMinutes: Number(durationMinutes) || 45,
+          teacherName: teacherName || (currentUser?.fullName || 'Giáo viên'),
+          numQuestions: qCount,
+          numOptions: optCount,
+          maxScore: mScore,
+          passingScore: Number(passingScore) || 5,
+          decimalPrecision,
+          templateId: finalTemplateId,
+          questions: primaryVariant.questions,
+          variants: builtVariants,
+          defaultVariantCode: primaryVariant.code,
+          instructions,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          status: 'active',
+          // Creator & School Sharing
+          createdById: currentUser?.id,
+          createdByUsername: currentUser?.username,
+          createdByFullName: currentUser?.fullName,
+          createdByRole: currentUser?.role || 'teacher',
+          isSharedWithAllTeachers: isSharedWithAllTeachers || isAdmin,
+          targetScope
+        };
+        addExam(newExam);
       }
-      return {
-        id: v.id,
-        code: v.code,
-        title: v.title || `Mã đề ${v.code}`,
-        questions: qList,
-        answerKeyMap: v.answerKeyMap
-      };
-    });
 
-    const primaryVariant = builtVariants[0];
-
-    const newExam: Exam = {
-      id: 'exam_' + Math.random().toString(36).slice(2, 9),
-      code: primaryVariant.code || examCode,
-      title: title || `${subject} - ${targetScope === 'school_wide' ? 'Toàn Trường' : targetScope === 'grade_wide' ? `Khối ${grade}` : `Lớp ${className}`}`,
-      subject,
-      grade,
-      className: targetScope === 'school_wide' ? 'Toàn trường' : targetScope === 'grade_wide' ? `Khối ${grade}` : className,
-      academicYear,
-      semester,
-      examType,
-      examDate,
-      durationMinutes,
-      teacherName: teacherName || (currentUser?.fullName || 'Giáo viên'),
-      numQuestions,
-      numOptions,
-      maxScore,
-      passingScore,
-      decimalPrecision,
-      templateId: selectedTemplateId,
-      questions: primaryVariant.questions,
-      variants: builtVariants,
-      defaultVariantCode: primaryVariant.code,
-      instructions,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      status: 'active',
-      // Creator & School Sharing
-      createdById: currentUser?.id,
-      createdByUsername: currentUser?.username,
-      createdByFullName: currentUser?.fullName,
-      createdByRole: currentUser?.role || 'admin',
-      isSharedWithAllTeachers: isSharedWithAllTeachers || isAdmin,
-      targetScope
-    };
-
-    addExam(newExam);
-    onFinish();
+      onFinish();
+    } catch (err) {
+      console.error('Error publishing exam:', err);
+      alert('Có lỗi xảy ra khi lưu đề thi. Vui lòng kiểm tra lại thông tin.');
+    }
   };
 
   const steps = [
@@ -297,7 +397,7 @@ export const ExamWizard: React.FC<ExamWizardProps> = ({ onFinish, onCancel }) =>
     { num: 2, label: t.exam.step2 },
     { num: 3, label: '3. Mã Đề & Đáp Án' },
     { num: 4, label: t.exam.step4 },
-    { num: 5, label: t.exam.step6 },
+    { num: 5, label: isEditing ? '5. Xem Lại & Lưu' : t.exam.step6 },
   ];
 
   return (
@@ -309,12 +409,14 @@ export const ExamWizard: React.FC<ExamWizardProps> = ({ onFinish, onCancel }) =>
             <div className="p-2.5 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 shadow-lg shadow-cyan-500/10">
               <FileCheck className="w-6 h-6" />
             </div>
-            <span>{t.exam.createTitle}</span>
+            <span>{isEditing ? `Chỉnh Sửa Kỳ Thi: ${existingExam?.title || existingExam?.code}` : t.exam.createTitle}</span>
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            {isAdmin 
-              ? 'Tạo đề thi hỗ trợ nhiều mã đề (101, 102, 103...) — Hệ thống tự động nhận diện mã đề học sinh tô để chấm điểm chính xác.'
-              : 'Quy trình cấu hình đề thi đa mã đề, ma trận đáp án tương ứng và gán mẫu phiếu OMR.'}
+            {isEditing
+              ? 'Cập nhật lại cấu hình đề thi, danh sách các mã đề và ma trận đáp án tương ứng.'
+              : (isAdmin 
+                  ? 'Tạo đề thi hỗ trợ nhiều mã đề (101, 102, 103...) — Hệ thống tự động nhận diện mã đề học sinh tô để chấm điểm chính xác.'
+                  : 'Quy trình cấu hình đề thi đa mã đề, ma trận đáp án tương ứng và gán mẫu phiếu OMR.')}
           </p>
         </div>
 
@@ -1033,7 +1135,7 @@ export const ExamWizard: React.FC<ExamWizardProps> = ({ onFinish, onCancel }) =>
             className="flex items-center gap-1.5 px-7 py-2.5 text-xs font-bold rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white shadow-lg shadow-emerald-500/20 transition cursor-pointer"
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>{t.actions.finish}</span>
+            <span>{isEditing ? 'Lưu Thay Đổi Kỳ Thi' : t.actions.finish}</span>
           </button>
         )}
       </div>
