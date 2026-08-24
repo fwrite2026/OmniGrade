@@ -15,6 +15,7 @@ import {
 } from '../types';
 import { translations } from '../locales/translations';
 import { DEFAULT_120_TEMPLATE, DEFAULT_USERS } from '../services/demoData';
+import { saveTemplateImage, deleteTemplateImage } from '../services/imageStorage';
 
 interface AppContextType {
   language: Language;
@@ -148,6 +149,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return [DEFAULT_120_TEMPLATE];
   });
 
+  // Re-hydrate any IndexedDB stored background images for templates
+  useEffect(() => {
+    let isSubscribed = true;
+    const rehydrate = async () => {
+      const { loadTemplateImage } = await import('../services/imageStorage');
+      let changed = false;
+      const updated = await Promise.all(
+        templates.map(async (tpl) => {
+          if (!tpl.backgroundImageUrl || tpl.backgroundImageUrl.startsWith('data:')) {
+            return tpl;
+          }
+          const loaded = await loadTemplateImage(tpl.backgroundImageUrl);
+          if (loaded && loaded !== tpl.backgroundImageUrl) {
+            changed = true;
+            return { ...tpl, backgroundImageUrl: loaded };
+          }
+          return tpl;
+        })
+      );
+      if (isSubscribed && changed) {
+        setTemplates(updated);
+      }
+    };
+    rehydrate();
+    return () => {
+      isSubscribed = false;
+    };
+  }, []);
+
   const [exams, setExams] = useState<Exam[]>(() => {
     const saved = localStorage.getItem('omr_exams');
     if (saved !== null) {
@@ -248,7 +278,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [schoolName]);
 
   useEffect(() => {
-    localStorage.setItem('omr_templates', JSON.stringify(templates));
+    try {
+      // Create a lightweight version of templates without massive inline dataUrls for localStorage
+      const safeTemplates = templates.map(tpl => {
+        if (tpl.backgroundImageUrl && tpl.backgroundImageUrl.startsWith('data:') && tpl.backgroundImageUrl.length > 50000) {
+          // Offload to IndexedDB asynchronously
+          saveTemplateImage(tpl.id, tpl.backgroundImageUrl).catch(() => {});
+          // Store template id as reference key in localStorage
+          return {
+            ...tpl,
+            backgroundImageUrl: tpl.id
+          };
+        }
+        return tpl;
+      });
+      localStorage.setItem('omr_templates', JSON.stringify(safeTemplates));
+    } catch (e) {
+      console.warn('LocalStorage templates sync fallback:', e);
+    }
   }, [templates]);
 
   useEffect(() => {
@@ -440,15 +487,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Template actions
   const addTemplate = (template: AnswerSheetTemplate) => {
+    // If template has large dataUrl background, store in IndexedDB
+    if (template.backgroundImageUrl && template.backgroundImageUrl.startsWith('data:')) {
+      saveTemplateImage(template.id, template.backgroundImageUrl).catch(() => {});
+    }
     setTemplates(prev => [template, ...prev]);
     setActiveTemplateId(template.id);
   };
 
   const updateTemplate = (updated: AnswerSheetTemplate) => {
+    if (updated.backgroundImageUrl && updated.backgroundImageUrl.startsWith('data:')) {
+      saveTemplateImage(updated.id, updated.backgroundImageUrl).catch(() => {});
+    }
     setTemplates(prev => prev.map(t => t.id === updated.id ? updated : t));
   };
 
   const deleteTemplate = (id: string) => {
+    deleteTemplateImage(id).catch(() => {});
     setTemplates(prev => prev.filter(t => t.id !== id));
     if (activeTemplateId === id) {
       const remaining = templates.filter(t => t.id !== id);
@@ -458,6 +513,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const deleteTemplatesBatch = (ids: string[]) => {
     const idSet = new Set(ids);
+    ids.forEach(id => deleteTemplateImage(id).catch(() => {}));
     setTemplates(prev => prev.filter(t => !idSet.has(t.id)));
     if (activeTemplateId && idSet.has(activeTemplateId)) {
       const remaining = templates.filter(t => !idSet.has(t.id));

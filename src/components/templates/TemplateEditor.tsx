@@ -5,6 +5,7 @@ import { DEFAULT_120_TEMPLATE } from '../../services/demoData';
 import { generateAutoGridZones, renderTemplateToCanvas, getTemplateRealStats, rebuildSbdZones, rebuildExamCodeZones, rebuildQuestionMatrixZones } from '../../services/templateGenerator';
 import { processUploadedFileToImages, PdfPageResult } from '../../services/pdfService';
 import { detectBubblesFromImageData } from '../../services/bubbleDetection';
+import { loadTemplateImage, saveTemplateImage } from '../../services/imageStorage';
 import { TemplatePrintModal } from './TemplatePrintModal';
 import {
   Save,
@@ -121,16 +122,29 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
 
   // Sync state if initialTemplateId changes or is provided
   useEffect(() => {
+    let isCancelled = false;
     if (initialTemplateId) {
       const found = templates.find(tpl => tpl.id === initialTemplateId);
       if (found) {
         setCurrentTemplate(found);
-        setCustomBgImage(found.backgroundImageUrl || null);
         setHistory([found.zones || []]);
         setHistoryIndex(0);
         setSelectedZoneIds([]);
+
+        if (found.backgroundImageUrl) {
+          loadTemplateImage(found.backgroundImageUrl).then(resolvedUrl => {
+            if (!isCancelled) {
+              setCustomBgImage(resolvedUrl || found.backgroundImageUrl || null);
+            }
+          });
+        } else {
+          setCustomBgImage(null);
+        }
       }
     }
+    return () => {
+      isCancelled = true;
+    };
   }, [initialTemplateId, templates]);
 
   // PDF background navigation
