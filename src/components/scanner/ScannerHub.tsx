@@ -5,6 +5,7 @@ import { processAnswerSheet } from '../../services/omrEngine';
 import { createSimulatedFilledSheet } from '../../services/templateGenerator';
 import { processUploadedFileToImages } from '../../services/pdfService';
 import { NavTab } from '../common/Sidebar';
+import { ScanInspectionModal } from './ScanInspectionModal';
 import {
   ScanLine,
   Upload,
@@ -19,7 +20,9 @@ import {
   Layers,
   ArrowRight,
   Sparkles,
-  FileText
+  FileText,
+  Crosshair,
+  Maximize2
 } from 'lucide-react';
 
 interface ScannerHubProps {
@@ -34,6 +37,11 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
   const [processingProgress, setProcessingProgress] = useState<number>(0);
   const [currentPipelineStep, setCurrentPipelineStep] = useState<string>('');
   const [processedBatchResults, setProcessedBatchResults] = useState<ExamSubmission[]>([]);
+  const [inspectingSubmission, setInspectingSubmission] = useState<ExamSubmission | null>(null);
+
+  // Camera guides state
+  const [showHudSectionFrames, setShowHudSectionFrames] = useState<boolean>(true);
+  const [showHudAnchors, setShowHudAnchors] = useState<boolean>(true);
 
   // Camera state
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -73,6 +81,46 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
       { id: 'anchor_bl', type: 'anchor_mark' as const, x: 0.04, y: 0.945, width: 0.035, height: 0.02, label: 'Neo 3 (Dưới-Trái)' },
       { id: 'anchor_br', type: 'anchor_mark' as const, x: 0.925, y: 0.945, width: 0.035, height: 0.02, label: 'Neo 4 (Dưới-Phải)' }
     ];
+  })();
+
+  // Compute normalized section bounds for HUD viewfinder overlay
+  const sectionBounds = (() => {
+    const zones = currentTemplate?.zones || [];
+    const sbdZones = zones.filter(z => z.type === 'student_id_bubble');
+    const codeZones = zones.filter(z => z.type === 'exam_code_bubble');
+    const qZones = zones.filter(z => z.type === 'bubble');
+    const qrZones = zones.filter(z => z.type === 'student_id_qr');
+
+    return {
+      sbd: sbdZones.length > 0 ? {
+        x: Math.min(...sbdZones.map(z => z.x)),
+        y: Math.min(...sbdZones.map(z => z.y)),
+        w: Math.max(...sbdZones.map(z => z.x + z.width)) - Math.min(...sbdZones.map(z => z.x)),
+        h: Math.max(...sbdZones.map(z => z.y + z.height)) - Math.min(...sbdZones.map(z => z.y)),
+        digits: currentTemplate?.numIdDigits || 6
+      } : null,
+      examCode: codeZones.length > 0 ? {
+        x: Math.min(...codeZones.map(z => z.x)),
+        y: Math.min(...codeZones.map(z => z.y)),
+        w: Math.max(...codeZones.map(z => z.x + z.width)) - Math.min(...codeZones.map(z => z.x)),
+        h: Math.max(...codeZones.map(z => z.y + z.height)) - Math.min(...codeZones.map(z => z.y)),
+        digits: currentTemplate?.numExamCodeDigits || 3
+      } : null,
+      questions: qZones.length > 0 ? {
+        x: Math.min(...qZones.map(z => z.x)),
+        y: Math.min(...qZones.map(z => z.y)),
+        w: Math.max(...qZones.map(z => z.x + z.width)) - Math.min(...qZones.map(z => z.x)),
+        h: Math.max(...qZones.map(z => z.y + z.height)) - Math.min(...qZones.map(z => z.y)),
+        count: currentTemplate?.numQuestions || 60,
+        cols: currentTemplate?.columnsCount || 4
+      } : null,
+      qr: qrZones.length > 0 ? {
+        x: qrZones[0].x,
+        y: qrZones[0].y,
+        w: qrZones[0].width,
+        h: qrZones[0].height
+      } : null
+    };
   })();
 
   // Helper to ensure an active exam exists for scanning/testing
@@ -163,7 +211,6 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
   };
 
   // 1. Camera Stream Lifecycle for activeTab (Switching between Upload / Camera / Demo tabs)
-  // and when component unmounts (Switching between sidebar navigation tabs: templates, exams, etc.)
   useEffect(() => {
     if (activeTab === 'camera') {
       startCamera();
@@ -179,7 +226,6 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        // Tab is hidden / switched to another browser tab -> shut off camera immediately
         stopCamera();
       }
     };
@@ -200,11 +246,11 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
     };
   }, []);
 
-  // Capture Snapshot from Camera and Grade
+  // Capture Snapshot from Camera and Grade with multi-stage anchor and section pipeline
   const handleCaptureCamera = async () => {
     if (!videoRef.current) return;
     setIsProcessing(true);
-    setCurrentPipelineStep(t.scanner.pipelineSteps.pageDetect);
+    setCurrentPipelineStep('Đang xác định 4 điểm neo góc & Căn chỉnh phối cảnh...');
     setProcessingProgress(20);
 
     const video = videoRef.current;
@@ -217,29 +263,34 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
     const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
 
     setTimeout(async () => {
-      setCurrentPipelineStep(t.scanner.pipelineSteps.evaluating);
-      setProcessingProgress(60);
+      setCurrentPipelineStep('Đang nhận diện Khung Số Báo Danh, Khung Mã Đề & Ma trận câu hỏi...');
+      setProcessingProgress(55);
 
-      try {
-        const targetExam = getOrCreateActiveExam();
-        const submission = await processAnswerSheet(
-          dataUrl,
-          currentTemplate,
-          targetExam,
-          students
-        );
+      setTimeout(async () => {
+        try {
+          setCurrentPipelineStep('Đang chấm điểm & đối chiếu đáp án...');
+          setProcessingProgress(85);
 
-        setCurrentPipelineStep(t.scanner.pipelineSteps.scoring);
-        setProcessingProgress(100);
+          const targetExam = getOrCreateActiveExam();
+          const submission = await processAnswerSheet(
+            dataUrl,
+            currentTemplate,
+            targetExam,
+            students
+          );
 
-        addSubmissions([submission]);
-        setProcessedBatchResults(prev => [submission, ...prev]);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setIsProcessing(false);
-      }
-    }, 600);
+          setCurrentPipelineStep('Hoàn tất nhận diện!');
+          setProcessingProgress(100);
+
+          addSubmissions([submission]);
+          setProcessedBatchResults(prev => [submission, ...prev]);
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setIsProcessing(false);
+        }
+      }, 350);
+    }, 450);
   };
 
   // Handle Multi-File Upload (Images and Multi-page PDFs)
@@ -399,7 +450,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
             <span>{t.scanner.title}</span>
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Động cơ OMR nhận diện mật độ điểm ảnh, phát hiện tô 2 đáp án và tính điểm tự động.
+            Camera tự động căn 4 điểm neo theo mẫu, phân vùng Khung Số Báo Danh, Khung Mã Đề và Ma trận câu hỏi trắc nghiệm.
           </p>
         </div>
 
@@ -523,14 +574,32 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                   {isCameraActive ? 'Camera đang hoạt động' : 'Camera đã tắt (Tiết kiệm pin & bảo mật)'}
                 </span>
                 <span className="text-[11px] text-slate-400 hidden sm:inline">
-                  • Tự động ngắt khi chuyển tab
+                  • Căn 4 điểm neo & 3 khung OMR
                 </span>
               </div>
 
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-cyan-300 bg-cyan-950/60 border border-cyan-500/30 px-2.5 py-1 rounded-xl">
-                  Đang căn: {currentTemplate?.name || 'Mẫu chuẩn'} ({activeAnchors.length} điểm neo)
-                </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowHudAnchors(!showHudAnchors)}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                    showHudAnchors ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40' : 'bg-white/5 text-slate-400'
+                  }`}
+                >
+                  <Crosshair className="w-3.5 h-3.5" />
+                  <span>4 Điểm Neo ({activeAnchors.length})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowHudSectionFrames(!showHudSectionFrames)}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                    showHudSectionFrames ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'bg-white/5 text-slate-400'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>3 Khung Định Vị (SBD, Mã đề, Câu hỏi)</span>
+                </button>
 
                 {isCameraActive ? (
                   <button
@@ -590,18 +659,18 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                   autoPlay
                   playsInline
                   muted
-                  className="w-full max-h-[520px] object-cover"
+                  className="w-full max-h-[540px] object-cover"
                 />
 
-                {/* Viewfinder Guide Overlay with Dynamic Anchors matching the Selected Template */}
+                {/* Viewfinder Guide Overlay with Dynamic Anchors & 3 Section Frames */}
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-3 sm:p-5">
                   {/* Outer Sheet Aspect Ratio Container matching standard portrait A4 format */}
-                  <div className="w-full max-w-[380px] sm:max-w-[400px] aspect-[210/297] max-h-[92%] border-2 border-dashed border-cyan-400/70 rounded-xl relative shadow-[0_0_35px_rgba(6,182,212,0.25)] bg-cyan-950/5">
+                  <div className="w-full max-w-[380px] sm:max-w-[420px] aspect-[210/297] max-h-[92%] border-2 border-dashed border-cyan-400/70 rounded-xl relative shadow-[0_0_35px_rgba(6,182,212,0.25)] bg-cyan-950/5">
                     {/* Animated Scanning Laser Line */}
                     <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_12px_rgba(6,182,212,1)] animate-bounce opacity-75" />
 
-                    {/* Dynamic Template Anchors rendered exactly at template coordinates */}
-                    {activeAnchors.map((anchor, idx) => {
+                    {/* 1. Dynamic 4 Template Anchors rendered exactly at template coordinates */}
+                    {showHudAnchors && activeAnchors.map((anchor, idx) => {
                       const posX = anchor.x * 100;
                       const posY = anchor.y * 100;
                       const isTop = anchor.y < 0.5;
@@ -611,7 +680,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                       return (
                         <div
                           key={anchor.id || `anchor_${idx}`}
-                          className="absolute pointer-events-none transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center z-10"
+                          className="absolute pointer-events-none transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center z-20"
                           style={{
                             left: `${posX}%`,
                             top: `${posY}%`,
@@ -620,8 +689,8 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                           {/* Anchor Optical Box & Reticle */}
                           <div className="relative flex items-center justify-center">
                             {/* Optical Black Marker Square */}
-                            <div className="w-7 h-7 sm:w-8 sm:h-8 bg-black/90 border-2 border-cyan-400 rounded-sm shadow-[0_0_14px_#22d3ee] flex items-center justify-center backdrop-blur-xs">
-                              <div className="w-3 h-3 bg-cyan-400/90 rounded-xs shadow-[0_0_6px_#22d3ee]" />
+                            <div className="w-7 h-7 sm:w-8 sm:h-8 bg-black/90 border-2 border-purple-400 rounded-sm shadow-[0_0_14px_#c084fc] flex items-center justify-center backdrop-blur-xs">
+                              <div className="w-3 h-3 bg-purple-400/90 rounded-xs shadow-[0_0_6px_#c084fc]" />
                             </div>
 
                             {/* Precise corner reticles */}
@@ -633,7 +702,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
 
                           {/* Anchor Label Tag */}
                           <span
-                            className={`text-[9px] font-bold text-cyan-200 bg-black/90 px-1.5 py-0.5 rounded-md border border-cyan-500/40 whitespace-nowrap shadow-lg ${
+                            className={`text-[9px] font-bold text-purple-200 bg-black/90 px-1.5 py-0.5 rounded-md border border-purple-500/40 whitespace-nowrap shadow-lg ${
                               isTop ? 'mt-1.5' : 'mb-1.5 order-first'
                             }`}
                           >
@@ -643,16 +712,89 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                       );
                     })}
 
+                    {/* 2. Real-Time HUD 3-Section Frame Overlays */}
+                    {showHudSectionFrames && (
+                      <>
+                        {/* Frame 1: Khung Số Báo Danh (SBD) */}
+                        {sectionBounds.sbd && (
+                          <div
+                            className="absolute border border-dashed border-emerald-400/90 bg-emerald-500/10 rounded-lg pointer-events-none flex flex-col justify-start p-1 shadow-[0_0_10px_rgba(16,185,129,0.2)] z-10"
+                            style={{
+                              left: `${sectionBounds.sbd.x * 100}%`,
+                              top: `${sectionBounds.sbd.y * 100}%`,
+                              width: `${sectionBounds.sbd.w * 100}%`,
+                              height: `${sectionBounds.sbd.h * 100}%`
+                            }}
+                          >
+                            <span className="text-[8px] font-bold text-emerald-300 bg-black/90 px-1 py-0.2 rounded-xs self-start border border-emerald-500/40">
+                              Khung SBD ({sectionBounds.sbd.digits} số)
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Frame 2: Khung Mã Đề */}
+                        {sectionBounds.examCode && (
+                          <div
+                            className="absolute border border-dashed border-purple-400/90 bg-purple-500/10 rounded-lg pointer-events-none flex flex-col justify-start p-1 shadow-[0_0_10px_rgba(168,85,247,0.2)] z-10"
+                            style={{
+                              left: `${sectionBounds.examCode.x * 100}%`,
+                              top: `${sectionBounds.examCode.y * 100}%`,
+                              width: `${sectionBounds.examCode.w * 100}%`,
+                              height: `${sectionBounds.examCode.h * 100}%`
+                            }}
+                          >
+                            <span className="text-[8px] font-bold text-purple-300 bg-black/90 px-1 py-0.2 rounded-xs self-start border border-purple-500/40">
+                              Khung Mã Đề ({sectionBounds.examCode.digits} số)
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Frame 3: Khung Các Câu Trắc Nghiệm */}
+                        {sectionBounds.questions && (
+                          <div
+                            className="absolute border border-dashed border-cyan-400/90 bg-cyan-500/10 rounded-lg pointer-events-none flex flex-col justify-start p-1 shadow-[0_0_10px_rgba(6,182,212,0.2)] z-10"
+                            style={{
+                              left: `${sectionBounds.questions.x * 100}%`,
+                              top: `${sectionBounds.questions.y * 100}%`,
+                              width: `${sectionBounds.questions.w * 100}%`,
+                              height: `${sectionBounds.questions.h * 100}%`
+                            }}
+                          >
+                            <span className="text-[8px] font-bold text-cyan-300 bg-black/90 px-1 py-0.2 rounded-xs self-start border border-cyan-500/40">
+                              Khung Trắc Nghiệm ({sectionBounds.questions.count} câu - {sectionBounds.questions.cols} cột)
+                            </span>
+                          </div>
+                        )}
+
+                        {/* QR Code Frame if present */}
+                        {sectionBounds.qr && (
+                          <div
+                            className="absolute border border-dashed border-amber-400/90 bg-amber-500/10 rounded-lg pointer-events-none flex flex-col justify-start p-1 z-10"
+                            style={{
+                              left: `${sectionBounds.qr.x * 100}%`,
+                              top: `${sectionBounds.qr.y * 100}%`,
+                              width: `${sectionBounds.qr.w * 100}%`,
+                              height: `${sectionBounds.qr.h * 100}%`
+                            }}
+                          >
+                            <span className="text-[8px] font-bold text-amber-300 bg-black/90 px-1 py-0.2 rounded-xs self-start border border-amber-500/40">
+                              Mã QR Định Danh
+                            </span>
+                          </div>
+                        )}
+                      </>
+                    )}
+
                     {/* Header Instruction Badge */}
-                    <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/90 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-bold text-cyan-300 border border-cyan-500/40 shadow-xl flex items-center gap-1.5 whitespace-nowrap z-20">
+                    <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/90 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-bold text-cyan-300 border border-cyan-500/40 shadow-xl flex items-center gap-1.5 whitespace-nowrap z-30">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                      Căn 4 điểm đen ở góc phiếu vào đúng 4 điểm neo của mẫu
+                      Căn 4 điểm đen góc & 3 khung OMR vào đúng vùng hướng dẫn
                     </div>
                   </div>
                 </div>
 
                 {/* Floating Capture Button */}
-                <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3">
+                <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3">
                   <button
                     id="btn-capture-camera"
                     onClick={handleCaptureCamera}
@@ -689,7 +831,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                     Trường hợp 1: Bài làm chuẩn 100%
                   </span>
                   <h4 className="font-bold text-sm text-white mt-1">Học sinh tô rõ ràng, đạt điểm cao</h4>
-                  <p className="text-xs text-slate-400">Mực bút chì 2B đậm, tất cả 40 câu nhận diện tự động với độ tin cậy 99%.</p>
+                  <p className="text-xs text-slate-400">Mực bút chì 2B đậm, tất cả các câu nhận diện tự động với độ tin cậy 99%.</p>
                 </div>
                 <button
                   type="button"
@@ -708,7 +850,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                     Trường hợp 2: Bài làm bình thường
                   </span>
                   <h4 className="font-bold text-sm text-white mt-1">Phân bố điểm tự nhiên</h4>
-                  <p className="text-xs text-slate-400">Học sinh làm đúng khoảng 32-35 câu, có câu đúng câu sai thông thường.</p>
+                  <p className="text-xs text-slate-400">Học sinh làm đúng khoảng 80% số câu, có câu đúng câu sai thông thường.</p>
                 </div>
                 <button
                   type="button"
@@ -803,30 +945,36 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
               </div>
             </div>
 
-            <div className="divide-y divide-white/5 max-h-[300px] overflow-y-auto">
+            <div className="divide-y divide-white/5 max-h-[360px] overflow-y-auto space-y-2">
               {processedBatchResults.map((res) => {
                 const isNeedsReview = res.status === 'NEEDS_REVIEW' || res.status === 'MULTIPLE_ANSWERS' || res.status === 'LOW_CONFIDENCE';
                 return (
-                  <div key={res.id} className="py-3 flex items-center justify-between gap-4">
+                  <div key={res.id} className="p-3 rounded-2xl bg-white/5 border border-white/10 hover:border-cyan-500/30 transition flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
+                      <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
                         isNeedsReview ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                       }`}>
                         {isNeedsReview ? '⚠' : '✓'}
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-white">
-                          {res.studentName} <span className="font-normal text-slate-400 font-mono">({res.studentId})</span>
+                        <p className="text-xs font-bold text-white flex items-center gap-2">
+                          <span>{res.studentName}</span>
+                          <span className="font-mono text-emerald-300 bg-emerald-950/60 px-1.5 py-0.2 rounded-md text-[10px] border border-emerald-500/30">
+                            SBD: {res.studentId}
+                          </span>
+                          <span className="font-mono text-purple-300 bg-purple-950/60 px-1.5 py-0.2 rounded-md text-[10px] border border-purple-500/30">
+                            Mã đề: {res.detectedExamCode || res.appliedVariantCode || '101'}
+                          </span>
                         </p>
-                        <p className="text-[11px] text-slate-400">
-                          Đúng {res.totalCorrect}/{currentExam.numQuestions} câu • Độ tin cậy: {res.overallConfidence}%
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          Đúng {res.totalCorrect}/{currentExam.numQuestions} câu • Độ tin cậy: {res.overallConfidence}% • 4 Điểm neo chuẩn
                         </p>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 self-end sm:self-center">
                       <div className="text-right">
-                        <span className="text-sm font-bold text-cyan-400">
+                        <span className="text-base font-bold text-cyan-400">
                           {res.totalScore} <span className="text-xs font-normal text-slate-400">/ {res.maxScore}</span>
                         </span>
                         <p className={`text-[10px] font-semibold ${isNeedsReview ? 'text-amber-400' : 'text-emerald-400'}`}>
@@ -835,8 +983,18 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
                       </div>
 
                       <button
+                        type="button"
+                        onClick={() => setInspectingSubmission(res)}
+                        className="px-3 py-1.5 text-xs font-bold text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 rounded-xl transition cursor-pointer border border-cyan-500/30 flex items-center gap-1"
+                        title="Xem chi tiết 3 khung & 4 điểm neo"
+                      >
+                        <Crosshair className="w-3.5 h-3.5" />
+                        <span>Xem 3 Khung & Neo</span>
+                      </button>
+
+                      <button
                         onClick={() => onNavigate('review')}
-                        className="px-2.5 py-1 text-xs font-medium text-slate-300 bg-white/5 hover:bg-white/10 rounded-lg transition cursor-pointer border border-white/10"
+                        className="px-3 py-1.5 text-xs font-medium text-slate-300 bg-white/5 hover:bg-white/10 rounded-xl transition cursor-pointer border border-white/10"
                       >
                         Kiểm tra
                       </button>
@@ -848,6 +1006,17 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
           </div>
         )}
       </div>
+
+      {/* Section & Anchor Inspection Modal */}
+      {inspectingSubmission && (
+        <ScanInspectionModal
+          isOpen={true}
+          onClose={() => setInspectingSubmission(null)}
+          submission={inspectingSubmission}
+          template={currentTemplate}
+        />
+      )}
     </div>
   );
 };
+

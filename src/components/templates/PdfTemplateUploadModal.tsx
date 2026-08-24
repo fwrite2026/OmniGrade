@@ -4,6 +4,7 @@ import { AnswerSheetTemplate, RecognitionZone } from '../../types';
 import { processUploadedFileToImages, PdfPageResult } from '../../services/pdfService';
 import { detectBubblesFromImageData, DetectedBubbleGridResult } from '../../services/bubbleDetection';
 import { generateAutoGridZones } from '../../services/templateGenerator';
+import { saveTemplateImage } from '../../services/imageStorage';
 import {
   FileUp,
   X,
@@ -67,9 +68,13 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
   const [offsetX, setOffsetX] = useState<number>(0);
   const [offsetY, setOffsetY] = useState<number>(0);
   const [numIdDigits, setNumIdDigits] = useState<number>(6);
+  const [numExamCodeDigits, setNumExamCodeDigits] = useState<number>(3);
+  const [hasStudentIdBubbles, setHasStudentIdBubbles] = useState<boolean>(true);
+  const [hasExamCodeBubbles, setHasExamCodeBubbles] = useState<boolean>(true);
   const [hasQrCode, setHasQrCode] = useState<boolean>(true);
   const [hasAnchorMarks, setHasAnchorMarks] = useState<boolean>(true);
   const [useAiDetectedZones, setUseAiDetectedZones] = useState<boolean>(true);
+  const [showSectionBoxes, setShowSectionBoxes] = useState<boolean>(true);
 
   // Auto detection result state
   const [detectedResult, setDetectedResult] = useState<DetectedBubbleGridResult | null>(null);
@@ -85,10 +90,7 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
       useAiDetectedZones &&
       detectedResult &&
       detectedResult.detectedZones &&
-      detectedResult.detectedZones.length > 0 &&
-      detectedResult.numQuestions === numQuestions &&
-      detectedResult.columnsCount === columnsCount &&
-      detectedResult.numOptions === numOptions;
+      detectedResult.detectedZones.length > 0;
 
     let baseZones: RecognitionZone[];
     if (isAiMatching && detectedResult) {
@@ -108,7 +110,7 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
     // Apply micro offsets and bubble scaling if altered
     if (offsetX !== 0 || offsetY !== 0 || bubbleScale !== 1.0) {
       return baseZones.map(z => {
-        if (z.type === 'bubble' || z.type === 'student_id_bubble') {
+        if (z.type === 'bubble' || z.type === 'student_id_bubble' || z.type === 'exam_code_bubble') {
           return {
             ...z,
             x: Math.max(0.01, Math.min(0.97, z.x + offsetX)),
@@ -124,7 +126,7 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
     return baseZones;
   };
 
-  // Render Canvas with Zone Overlay on Preview
+  // Render Canvas with Zone Overlay and Section Frame Highlighting
   useEffect(() => {
     if (pdfPages.length === 0 || !pdfPages[selectedPageIndex]) return;
     const page = pdfPages[selectedPageIndex];
@@ -145,6 +147,8 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
 
       if (showZoneOverlay) {
         const zones = getActiveZones();
+
+        // 1. Draw individual bubbles / zones
         zones.forEach(zone => {
           const zX = zone.x * canvas.width;
           const zY = zone.y * canvas.height;
@@ -152,8 +156,24 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
           const zH = zone.height * canvas.height;
 
           ctx.save();
-          if (zone.type === 'bubble' || zone.type === 'student_id_bubble') {
-            ctx.strokeStyle = '#06B6D4'; // Cyan
+          if (zone.type === 'student_id_bubble') {
+            ctx.strokeStyle = '#10B981'; // Emerald for SBD
+            ctx.fillStyle = 'rgba(16, 185, 129, 0.35)';
+            ctx.lineWidth = 1.3;
+            ctx.beginPath();
+            ctx.arc(zX + zW / 2, zY + zH / 2, Math.min(zW, zH) / 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          } else if (zone.type === 'exam_code_bubble') {
+            ctx.strokeStyle = '#A855F7'; // Purple for Exam Code
+            ctx.fillStyle = 'rgba(168, 85, 247, 0.35)';
+            ctx.lineWidth = 1.3;
+            ctx.beginPath();
+            ctx.arc(zX + zW / 2, zY + zH / 2, Math.min(zW, zH) / 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          } else if (zone.type === 'bubble') {
+            ctx.strokeStyle = '#06B6D4'; // Cyan for Questions
             ctx.fillStyle = 'rgba(6, 182, 212, 0.28)';
             ctx.lineWidth = 1.2;
             ctx.beginPath();
@@ -161,26 +181,91 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
             ctx.fill();
             ctx.stroke();
           } else if (zone.type === 'student_id_qr') {
-            ctx.strokeStyle = '#10B981';
-            ctx.fillStyle = 'rgba(16, 185, 129, 0.2)';
+            ctx.strokeStyle = '#F59E0B';
+            ctx.fillStyle = 'rgba(245, 158, 11, 0.2)';
             ctx.lineWidth = 1.5;
             ctx.strokeRect(zX, zY, zW, zH);
             ctx.fillRect(zX, zY, zW, zH);
           } else if (zone.type === 'anchor_mark') {
             ctx.strokeStyle = '#8B5CF6';
-            ctx.fillStyle = 'rgba(139, 92, 246, 0.3)';
-            ctx.lineWidth = 1.5;
+            ctx.fillStyle = 'rgba(139, 92, 246, 0.4)';
+            ctx.lineWidth = 2;
             ctx.strokeRect(zX, zY, zW, zH);
             ctx.fillRect(zX, zY, zW, zH);
           }
           ctx.restore();
         });
+
+        // 2. Draw Section Bounding Boxes if enabled
+        if (showSectionBoxes) {
+          const sbdZones = zones.filter(z => z.type === 'student_id_bubble');
+          const codeZones = zones.filter(z => z.type === 'exam_code_bubble');
+          const qZones = zones.filter(z => z.type === 'bubble');
+
+          // Draw SBD Box
+          if (sbdZones.length > 0) {
+            const minX = Math.min(...sbdZones.map(z => z.x)) * canvas.width - 4;
+            const minY = Math.min(...sbdZones.map(z => z.y)) * canvas.height - 4;
+            const maxX = Math.max(...sbdZones.map(z => z.x + z.width)) * canvas.width + 4;
+            const maxY = Math.max(...sbdZones.map(z => z.y + z.height)) * canvas.height + 4;
+            ctx.save();
+            ctx.strokeStyle = '#10B981';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+            ctx.fillStyle = '#10B981';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.fillRect(minX, minY - 15, 110, 15);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillText('Khung Số Báo Danh', minX + 4, minY - 4);
+            ctx.restore();
+          }
+
+          // Draw Exam Code Box
+          if (codeZones.length > 0) {
+            const minX = Math.min(...codeZones.map(z => z.x)) * canvas.width - 4;
+            const minY = Math.min(...codeZones.map(z => z.y)) * canvas.height - 4;
+            const maxX = Math.max(...codeZones.map(z => z.x + z.width)) * canvas.width + 4;
+            const maxY = Math.max(...codeZones.map(z => z.y + z.height)) * canvas.height + 4;
+            ctx.save();
+            ctx.strokeStyle = '#A855F7';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+            ctx.fillStyle = '#A855F7';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.fillRect(minX, minY - 15, 90, 15);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillText('Khung Mã Đề', minX + 4, minY - 4);
+            ctx.restore();
+          }
+
+          // Draw Question Matrix Box
+          if (qZones.length > 0) {
+            const minX = Math.min(...qZones.map(z => z.x)) * canvas.width - 6;
+            const minY = Math.min(...qZones.map(z => z.y)) * canvas.height - 6;
+            const maxX = Math.max(...qZones.map(z => z.x + z.width)) * canvas.width + 6;
+            const maxY = Math.max(...qZones.map(z => z.y + z.height)) * canvas.height + 6;
+            ctx.save();
+            ctx.strokeStyle = '#06B6D4';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+            ctx.fillStyle = '#06B6D4';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.fillRect(minX, minY - 15, 125, 15);
+            ctx.fillStyle = '#000000';
+            ctx.fillText('Khung Trắc Nghiệm', minX + 4, minY - 4);
+            ctx.restore();
+          }
+        }
       }
     };
   }, [
     pdfPages,
     selectedPageIndex,
     showZoneOverlay,
+    showSectionBoxes,
     numQuestions,
     numOptions,
     columnsCount,
@@ -189,9 +274,11 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
     gridYEnd,
     gridXStart,
     gridXEnd,
+    bubbleScale,
     offsetX,
     offsetY,
-    bubbleScale,
+    hasAnchorMarks,
+    hasQrCode,
     useAiDetectedZones,
     detectedResult
   ]);
@@ -222,6 +309,17 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
           if (cvResult.numQuestions) setNumQuestions(cvResult.numQuestions);
           if (cvResult.numOptions) setNumOptions(cvResult.numOptions);
           if (cvResult.columnsCount) setColumnsCount(cvResult.columnsCount);
+          if (cvResult.numSbdDigits) {
+            setNumIdDigits(cvResult.numSbdDigits);
+            setHasStudentIdBubbles(true);
+          }
+          if (cvResult.numExamCodeDigits) {
+            setNumExamCodeDigits(cvResult.numExamCodeDigits);
+            setHasExamCodeBubbles(true);
+          }
+          if (cvResult.hasQrCode !== undefined) setHasQrCode(cvResult.hasQrCode);
+          if (cvResult.hasAnchorMarks !== undefined) setHasAnchorMarks(cvResult.hasAnchorMarks);
+
           if (cvResult.gridBounds) {
             setGridXStart(cvResult.gridBounds.xStart);
             setGridXEnd(cvResult.gridBounds.xEnd);
@@ -263,6 +361,14 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
         if (cvResult.numQuestions) setNumQuestions(cvResult.numQuestions);
         if (cvResult.numOptions) setNumOptions(cvResult.numOptions);
         if (cvResult.columnsCount) setColumnsCount(cvResult.columnsCount);
+        if (cvResult.numSbdDigits) {
+          setNumIdDigits(cvResult.numSbdDigits);
+          setHasStudentIdBubbles(true);
+        }
+        if (cvResult.numExamCodeDigits) {
+          setNumExamCodeDigits(cvResult.numExamCodeDigits);
+          setHasExamCodeBubbles(true);
+        }
         if (cvResult.gridBounds) {
           setGridXStart(cvResult.gridBounds.xStart);
           setGridXEnd(cvResult.gridBounds.xEnd);
@@ -291,6 +397,14 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
       if (cvResult.numQuestions) setNumQuestions(cvResult.numQuestions);
       if (cvResult.numOptions) setNumOptions(cvResult.numOptions);
       if (cvResult.columnsCount) setColumnsCount(cvResult.columnsCount);
+      if (cvResult.numSbdDigits) {
+        setNumIdDigits(cvResult.numSbdDigits);
+        setHasStudentIdBubbles(true);
+      }
+      if (cvResult.numExamCodeDigits) {
+        setNumExamCodeDigits(cvResult.numExamCodeDigits);
+        setHasExamCodeBubbles(true);
+      }
       if (cvResult.gridBounds) {
         setGridXStart(cvResult.gridBounds.xStart);
         setGridXEnd(cvResult.gridBounds.xEnd);
@@ -327,7 +441,7 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
     }
   };
 
-  const handleCreateTemplate = (openInEditor: boolean = false) => {
+  const handleCreateTemplate = async (openInEditor: boolean = false) => {
     if (pdfPages.length === 0) {
       setErrorMessage('Vui lòng tải lên tệp PDF hoặc ảnh mẫu phiếu trước.');
       return;
@@ -336,8 +450,18 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
     const selectedPage = pdfPages[selectedPageIndex];
     const finalZones = getActiveZones();
 
+    const templateId = `tpl_pdf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    
+    // Save image to IndexedDB to avoid localStorage quota issues
+    let imageUri = selectedPage.dataUrl;
+    try {
+      await saveTemplateImage(templateId, selectedPage.dataUrl);
+    } catch (e) {
+      console.warn('Could not store to IndexedDB, fallback to direct dataUrl:', e);
+    }
+
     const newTemplate: AnswerSheetTemplate = {
-      id: `tpl_pdf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      id: templateId,
       name: templateName.trim() || 'Phiếu Trắc Nghiệm Tải Lên',
       schoolName: localSchool.trim(),
       version: '1.0',
@@ -345,10 +469,13 @@ export const PdfTemplateUploadModal: React.FC<PdfTemplateUploadModalProps> = ({
       numQuestions,
       numOptions,
       numIdDigits,
+      numExamCodeDigits,
+      hasStudentIdBubbles,
+      hasExamCodeBubbles,
       hasQrCode,
       hasAnchorMarks,
       zones: finalZones,
-      backgroundImageUrl: selectedPage.dataUrl,
+      backgroundImageUrl: imageUri,
       fillThreshold: 0.35,
       uncertainThreshold: 0.18,
       columnsCount,
