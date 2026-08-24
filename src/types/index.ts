@@ -2,7 +2,8 @@ export type UserRole = 'teacher' | 'admin';
 
 export interface UserAccount {
   id: string;
-  username: string; // e.g. 'admin', 'giaovien01' - no email required
+  username: string; // e.g. 'admin', 'giaovien01', 'taminhkhoi'
+  email?: string;
   password: string; // e.g. 'admin@123'
   fullName: string;
   role: UserRole;

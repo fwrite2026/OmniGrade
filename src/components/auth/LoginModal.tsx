@@ -123,7 +123,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Ví dụ: admin hoặc giaovien01"
+                  placeholder="Ví dụ: taminhkhoi, admin hoặc giaovien01"
                   required
                   autoFocus
                   autoCapitalize="none"
