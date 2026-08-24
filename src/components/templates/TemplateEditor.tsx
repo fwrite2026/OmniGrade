@@ -119,6 +119,20 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
   const [history, setHistory] = useState<RecognitionZone[][]>([currentTemplate?.zones || []]);
   const [historyIndex, setHistoryIndex] = useState<number>(0);
 
+  // Sync state if initialTemplateId changes or is provided
+  useEffect(() => {
+    if (initialTemplateId) {
+      const found = templates.find(tpl => tpl.id === initialTemplateId);
+      if (found) {
+        setCurrentTemplate(found);
+        setCustomBgImage(found.backgroundImageUrl || null);
+        setHistory([found.zones || []]);
+        setHistoryIndex(0);
+        setSelectedZoneIds([]);
+      }
+    }
+  }, [initialTemplateId, templates]);
+
   // PDF background navigation
   const [isUploadingBg, setIsUploadingBg] = useState<boolean>(false);
   const [loadedPdfPages, setLoadedPdfPages] = useState<PdfPageResult[]>([]);
@@ -557,7 +571,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
     const targetZones = selectedZoneIds.length > 0 ? selectedZoneIds : null;
 
     const updated = currentTemplate.zones.map(z => {
-      if ((targetZones ? targetZones.includes(z.id) : true) && (z.type === 'bubble' || z.type === 'student_id_bubble')) {
+      if ((targetZones ? targetZones.includes(z.id) : true) && (z.type === 'bubble' || z.type === 'student_id_bubble' || z.type === 'exam_code_bubble')) {
         const baseW = 0.024 * scaleFactor;
         const baseH = 0.03 * scaleFactor;
         return {
@@ -601,6 +615,16 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
             drawZonesAndSelection(ctx, width, height);
           }
         };
+        bgImg.onerror = () => {
+          if (!isCancelled) {
+            renderTemplateToCanvas(currentTemplate, undefined, '101', 'BÀI THI TRẮC NGHIỆM', width, height).then(renderedCanvas => {
+              if (!isCancelled) {
+                ctx.drawImage(renderedCanvas, 0, 0, width, height);
+                drawZonesAndSelection(ctx, width, height);
+              }
+            });
+          }
+        };
         bgImg.src = customBgImage;
       } else {
         const renderedCanvas = await renderTemplateToCanvas(currentTemplate, undefined, '101', 'BÀI THI TRẮC NGHIỆM', width, height);
@@ -632,7 +656,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
       const isInSameRow = selectedQNum && zone.questionNumber === selectedQNum && !isSelected;
 
       ctx.save();
-      if (zone.type === 'bubble' || zone.type === 'student_id_bubble') {
+      if (zone.type === 'bubble' || zone.type === 'student_id_bubble' || zone.type === 'exam_code_bubble') {
         if (isSelected) {
           ctx.strokeStyle = '#EF4444'; // Red for selected
           ctx.fillStyle = 'rgba(239, 68, 68, 0.4)';
@@ -641,8 +665,16 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
           ctx.strokeStyle = '#F59E0B'; // Amber for same row
           ctx.fillStyle = 'rgba(245, 158, 11, 0.25)';
           ctx.lineWidth = 2;
+        } else if (zone.type === 'exam_code_bubble') {
+          ctx.strokeStyle = '#3B82F6'; // Blue for exam code
+          ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+          ctx.lineWidth = 1.5;
+        } else if (zone.type === 'student_id_bubble') {
+          ctx.strokeStyle = '#10B981'; // Emerald for student ID
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.2)';
+          ctx.lineWidth = 1.5;
         } else {
-          ctx.strokeStyle = '#06B6D4'; // Cyan for regular
+          ctx.strokeStyle = '#06B6D4'; // Cyan for regular answer bubble
           ctx.fillStyle = 'rgba(6, 182, 212, 0.16)';
           ctx.lineWidth = 1.5;
         }
@@ -655,8 +687,14 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
         // Label
         if (isSelected || isInSameRow) {
           ctx.fillStyle = isSelected ? '#EF4444' : '#F59E0B';
-          ctx.font = 'bold 15px sans-serif';
-          ctx.fillText(`Q${zone.questionNumber}-${zone.option}`, zX, zY - 5);
+          ctx.font = 'bold 14px sans-serif';
+          if (zone.type === 'exam_code_bubble') {
+            ctx.fillText(`Mã[${zone.digitPosition ?? 0}]=${zone.digitValue ?? 0}`, zX, zY - 5);
+          } else if (zone.type === 'student_id_bubble') {
+            ctx.fillText(`SBD[${zone.digitPosition ?? 0}]=${zone.digitValue ?? 0}`, zX, zY - 5);
+          } else {
+            ctx.fillText(`Q${zone.questionNumber || '?'}-${zone.option || 'A'}`, zX, zY - 5);
+          }
         }
       } else if (zone.type === 'student_id_qr') {
         ctx.strokeStyle = isSelected ? '#EF4444' : '#10B981';
@@ -1140,6 +1178,20 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
     const bubbleIds = currentTemplate.zones.filter(z => z.type === 'bubble').map(z => z.id);
     setSelectedZoneIds(bubbleIds);
     setStatusMessage(`Đã chọn ${bubbleIds.length} ô đáp án`);
+  };
+
+  // Select SBD bubbles
+  const handleSelectSbdBubbles = () => {
+    const sbdIds = currentTemplate.zones.filter(z => z.type === 'student_id_bubble').map(z => z.id);
+    setSelectedZoneIds(sbdIds);
+    setStatusMessage(`Đã chọn ${sbdIds.length} ô Số Báo Danh`);
+  };
+
+  // Select Exam Code bubbles
+  const handleSelectExamCodeBubbles = () => {
+    const codeIds = currentTemplate.zones.filter(z => z.type === 'exam_code_bubble').map(z => z.id);
+    setSelectedZoneIds(codeIds);
+    setStatusMessage(`Đã chọn ${codeIds.length} ô Mã Đề`);
   };
 
   // Deselect All
@@ -4600,13 +4652,25 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
                       <label className="text-xs font-semibold text-slate-300">{t.template.zoneType}</label>
                       <select
                         value={singleSelectedZone.type}
-                        onChange={(e) => updateSingleZone({ type: e.target.value as ZoneType })}
+                        onChange={(e) => {
+                          const newType = e.target.value as ZoneType;
+                          let newLabel = singleSelectedZone.label;
+                          if (newType === 'exam_code_bubble') {
+                            newLabel = `Mã[${singleSelectedZone.digitPosition ?? 0}]=${singleSelectedZone.digitValue ?? 0}`;
+                          } else if (newType === 'student_id_bubble') {
+                            newLabel = `SBD[${singleSelectedZone.digitPosition ?? 0}]=${singleSelectedZone.digitValue ?? 0}`;
+                          } else if (newType === 'bubble') {
+                            newLabel = `Q${singleSelectedZone.questionNumber || 1}-${singleSelectedZone.option || 'A'}`;
+                          }
+                          updateSingleZone({ type: newType, label: newLabel });
+                        }}
                         className="w-full mt-1 text-xs border border-white/10 rounded-xl p-2.5 bg-white/5 text-white font-medium focus:outline-hidden focus:border-cyan-500/50"
                       >
                         <option value="bubble" className="bg-slate-900 text-white">Ô Tròn Đáp Án (Answer Bubble)</option>
-                        <option value="student_id_bubble" className="bg-slate-900 text-white">Ô Mã Học Sinh / SBD</option>
+                        <option value="student_id_bubble" className="bg-slate-900 text-white">Ô Mã Học Sinh / SBD (Số Báo Danh)</option>
+                        <option value="exam_code_bubble" className="bg-slate-900 text-white">Ô Mã Đề Thi (Exam Code Bubble)</option>
                         <option value="student_id_qr" className="bg-slate-900 text-white">Vùng Mã QR / Barcode</option>
-                        <option value="anchor_mark" className="bg-slate-900 text-white">Điểm Neo Căn Chỉnh (Anchor)</option>
+                        <option value="anchor_mark" className="bg-slate-900 text-white">Điểm Neo Căn Chỉnh (Anchor Mark)</option>
                       </select>
                     </div>
 
@@ -4643,6 +4707,54 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
                             <option value="C" className="bg-slate-900 text-white">Lựa chọn C</option>
                             <option value="D" className="bg-slate-900 text-white">Lựa chọn D</option>
                             <option value="E" className="bg-slate-900 text-white">Lựa chọn E</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* If student_id_bubble or exam_code_bubble: Digit Position & Digit Value */}
+                    {(singleSelectedZone.type === 'student_id_bubble' || singleSelectedZone.type === 'exam_code_bubble') && (
+                      <div className="grid grid-cols-2 gap-3 p-3 bg-blue-950/20 rounded-2xl border border-blue-500/20">
+                        <div>
+                          <label className="text-xs font-semibold text-cyan-300">
+                            {singleSelectedZone.type === 'exam_code_bubble' ? 'Cột Mã Đề (0-based)' : 'Cột SBD (0-based)'}
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={9}
+                            value={singleSelectedZone.digitPosition ?? 0}
+                            onChange={(e) => {
+                              const pos = parseInt(e.target.value, 10) || 0;
+                              const val = singleSelectedZone.digitValue ?? 0;
+                              const prefix = singleSelectedZone.type === 'exam_code_bubble' ? 'Mã' : 'SBD';
+                              updateSingleZone({
+                                digitPosition: pos,
+                                label: `${prefix}[${pos}]=${val}`
+                              });
+                            }}
+                            className="w-full mt-1 text-xs border border-white/10 rounded-xl p-2 bg-white/5 text-white font-bold focus:outline-hidden focus:border-cyan-500/50"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-xs font-semibold text-cyan-300">Chữ số (0 - 9)</label>
+                          <select
+                            value={singleSelectedZone.digitValue ?? 0}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10) || 0;
+                              const pos = singleSelectedZone.digitPosition ?? 0;
+                              const prefix = singleSelectedZone.type === 'exam_code_bubble' ? 'Mã' : 'SBD';
+                              updateSingleZone({
+                                digitValue: val,
+                                label: `${prefix}[${pos}]=${val}`
+                              });
+                            }}
+                            className="w-full mt-1 text-xs border border-white/10 rounded-xl p-2 bg-white/5 text-white font-bold focus:outline-hidden focus:border-cyan-500/50"
+                          >
+                            {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+                              <option key={num} value={num} className="bg-slate-900 text-white">Số {num}</option>
+                            ))}
                           </select>
                         </div>
                       </div>
@@ -4746,6 +4858,18 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ initialTemplateI
                         className="py-2 px-2.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-semibold rounded-xl transition cursor-pointer"
                       >
                         Chọn các ô đáp án
+                      </button>
+                      <button
+                        onClick={handleSelectSbdBubbles}
+                        className="py-2 px-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold rounded-xl transition cursor-pointer"
+                      >
+                        Chọn các ô SBD
+                      </button>
+                      <button
+                        onClick={handleSelectExamCodeBubbles}
+                        className="py-2 px-2.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 text-xs font-semibold rounded-xl transition cursor-pointer"
+                      >
+                        Chọn các ô Mã Đề
                       </button>
                     </div>
                   </div>

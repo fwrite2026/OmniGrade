@@ -1494,7 +1494,7 @@ export async function renderTemplateToCanvas(
     }
   }
 
-  // Identify column boundaries to frame each column
+  // Identify column boundaries to frame each column dynamically by X-coordinates
   const columnsCount = template.columnsCount || 4;
   const colsData: { qNums: number[]; minX: number; maxX: number; minY: number; maxY: number }[] = [];
 
@@ -1503,10 +1503,27 @@ export async function renderTemplateToCanvas(
   }
 
   const allQNums = Object.keys(questionsMap).map(Number).sort((a, b) => a - b);
-  const qPerCol = Math.ceil(allQNums.length / columnsCount);
+  
+  // Calculate question center-X to assign to the closest column bin
+  const qXs = allQNums.map(qNum => {
+    const zones = questionsMap[qNum];
+    const avgX = zones.reduce((s, z) => s + z.x, 0) / (zones.length || 1);
+    return { qNum, avgX };
+  });
 
-  allQNums.forEach((qNum, idx) => {
-    const colIdx = Math.min(columnsCount - 1, Math.floor(idx / qPerCol));
+  // Find unique sorted X columns
+  const sortedByX = [...qXs].sort((a, b) => a.avgX - b.avgX);
+  const minAvgX = sortedByX.length > 0 ? sortedByX[0].avgX : 0.1;
+  const maxAvgX = sortedByX.length > 0 ? sortedByX[sortedByX.length - 1].avgX : 0.9;
+  const colSpan = (maxAvgX - minAvgX) || 0.01;
+
+  allQNums.forEach((qNum) => {
+    const qInfo = qXs.find(item => item.qNum === qNum);
+    const avgX = qInfo ? qInfo.avgX : minAvgX;
+    const colIdx = columnsCount > 1 
+      ? Math.min(columnsCount - 1, Math.max(0, Math.round(((avgX - minAvgX) / colSpan) * (columnsCount - 1))))
+      : 0;
+    
     const zones = questionsMap[qNum];
     colsData[colIdx].qNums.push(qNum);
     zones.forEach(z => {

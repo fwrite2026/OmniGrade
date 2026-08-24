@@ -37,13 +37,43 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
 
   // Camera state
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
 
   // Selected Exam & Template
   const currentExam = activeExam || exams[0];
-  const currentTemplate = templates.find(t => t.id === currentExam?.templateId) || templates[0];
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(() => {
+    return currentExam?.templateId || templates[0]?.id || '';
+  });
+
+  // Keep selectedTemplateId in sync if currentExam changes
+  useEffect(() => {
+    if (currentExam?.templateId) {
+      setSelectedTemplateId(currentExam.templateId);
+    }
+  }, [currentExam?.templateId]);
+
+  const currentTemplate = templates.find(t => t.id === selectedTemplateId) || templates.find(t => t.id === currentExam?.templateId) || templates[0];
+
+  // Extract or compute 4 anchor marks according to the selected template
+  const templateAnchors = (currentTemplate?.zones || []).filter(z => z.type === 'anchor_mark');
+  const activeAnchors = (() => {
+    if (templateAnchors.length >= 4) {
+      return templateAnchors.slice(0, 4);
+    }
+    if (templateAnchors.length > 0) {
+      return templateAnchors;
+    }
+    // Fallback standard 4 corner anchors (Normalized coordinates on A4 sheet)
+    return [
+      { id: 'anchor_tl', type: 'anchor_mark' as const, x: 0.04, y: 0.035, width: 0.035, height: 0.02, label: 'Neo 1 (Trên-Trái)' },
+      { id: 'anchor_tr', type: 'anchor_mark' as const, x: 0.925, y: 0.035, width: 0.035, height: 0.02, label: 'Neo 2 (Trên-Phải)' },
+      { id: 'anchor_bl', type: 'anchor_mark' as const, x: 0.04, y: 0.945, width: 0.035, height: 0.02, label: 'Neo 3 (Dưới-Trái)' },
+      { id: 'anchor_br', type: 'anchor_mark' as const, x: 0.925, y: 0.945, width: 0.035, height: 0.02, label: 'Neo 4 (Dưới-Phải)' }
+    ];
+  })();
 
   // Helper to ensure an active exam exists for scanning/testing
   const getOrCreateActiveExam = (): Exam => {
@@ -86,20 +116,28 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
     return fallbackExam;
   };
 
-  // Camera Stream Lifecycle
-  useEffect(() => {
-    if (activeTab === 'camera') {
-      startCamera();
-    } else {
-      stopCamera();
+  // Safe camera stop helper - immediately halts all media tracks and releases hardware
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (e) {
+          console.warn('Error stopping camera track:', e);
+        }
+      });
+      streamRef.current = null;
     }
-    return () => {
-      stopCamera();
-    };
-  }, [activeTab]);
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setCameraStream(null);
+    setIsCameraActive(false);
+  };
 
   const startCamera = async () => {
     try {
+      stopCamera(); // Ensure previous stream is cleanly stopped
       setCameraError(null);
       if (!navigator?.mediaDevices?.getUserMedia) {
         setCameraError('Trình duyệt hoặc môi trường hiện tại không hỗ trợ camera trực tiếp. Vui lòng sử dụng tính năng "Tải tệp ảnh" hoặc "Chấm thử mẫu".');
@@ -108,6 +146,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
       });
+      streamRef.current = stream;
       setCameraStream(stream);
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -119,16 +158,47 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
     } catch (err: any) {
       console.error('Camera access failed:', err);
       setCameraError('Không thể kết nối máy ảnh. Vui lòng cấp quyền truy cập camera trong trình duyệt hoặc sử dụng chế độ Tải tệp ảnh.');
+      stopCamera();
     }
   };
 
-  const stopCamera = () => {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(t => t.stop());
-      setCameraStream(null);
+  // 1. Camera Stream Lifecycle for activeTab (Switching between Upload / Camera / Demo tabs)
+  // and when component unmounts (Switching between sidebar navigation tabs: templates, exams, etc.)
+  useEffect(() => {
+    if (activeTab === 'camera') {
+      startCamera();
+    } else {
+      stopCamera();
     }
-    setIsCameraActive(false);
-  };
+    return () => {
+      stopCamera();
+    };
+  }, [activeTab]);
+
+  // 2. Auto shut-off camera when user switches browser tabs or hides the app
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Tab is hidden / switched to another browser tab -> shut off camera immediately
+        stopCamera();
+      }
+    };
+
+    const handlePageHide = () => {
+      stopCamera();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('beforeunload', handlePageHide);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('beforeunload', handlePageHide);
+      stopCamera();
+    };
+  }, []);
 
   // Capture Snapshot from Camera and Grade
   const handleCaptureCamera = async () => {
@@ -333,30 +403,47 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
           </p>
         </div>
 
-        {/* Select Active Exam */}
-        <div className="flex items-center gap-2 bg-[#0E131F]/80 backdrop-blur-md p-2 rounded-2xl border border-white/10 shadow-lg">
-          <span className="text-xs font-semibold text-slate-300 whitespace-nowrap">{t.scanner.selectExam}</span>
-          <select
-            value={currentExam?.id || 'auto'}
-            onChange={(e) => {
-              if (e.target.value !== 'auto') {
-                setActiveExamId(e.target.value);
-              }
-            }}
-            className="text-xs font-bold text-cyan-300 bg-cyan-950/40 border border-cyan-500/30 rounded-xl p-1.5 focus:outline-hidden"
-          >
-            {exams.length === 0 ? (
-              <option value="auto" className="bg-slate-900 text-white">
-                Tự động khởi tạo ({currentTemplate?.numQuestions || 120} câu)
-              </option>
-            ) : (
-              exams.map(e => (
-                <option key={e.id} value={e.id} className="bg-slate-900 text-white">
-                  {e.title} ({e.code})
+        {/* Select Active Exam and Template */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 bg-[#0E131F]/80 backdrop-blur-md p-2 rounded-2xl border border-white/10 shadow-lg">
+            <span className="text-xs font-semibold text-slate-300 whitespace-nowrap">{t.scanner.selectExam}</span>
+            <select
+              value={currentExam?.id || 'auto'}
+              onChange={(e) => {
+                if (e.target.value !== 'auto') {
+                  setActiveExamId(e.target.value);
+                }
+              }}
+              className="text-xs font-bold text-cyan-300 bg-cyan-950/40 border border-cyan-500/30 rounded-xl p-1.5 focus:outline-hidden"
+            >
+              {exams.length === 0 ? (
+                <option value="auto" className="bg-slate-900 text-white">
+                  Tự động khởi tạo ({currentTemplate?.numQuestions || 120} câu)
                 </option>
-              ))
-            )}
-          </select>
+              ) : (
+                exams.map(e => (
+                  <option key={e.id} value={e.id} className="bg-slate-900 text-white">
+                    {e.title} ({e.code})
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2 bg-[#0E131F]/80 backdrop-blur-md p-2 rounded-2xl border border-white/10 shadow-lg">
+            <span className="text-xs font-semibold text-slate-300 whitespace-nowrap">Mẫu phiếu OMR:</span>
+            <select
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(e.target.value)}
+              className="text-xs font-bold text-emerald-300 bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-1.5 focus:outline-hidden max-w-[200px] truncate"
+            >
+              {templates.map(tpl => (
+                <option key={tpl.id} value={tpl.id} className="bg-slate-900 text-white">
+                  {tpl.name} ({tpl.numQuestions} câu)
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -428,38 +515,144 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({ onNavigate }) => {
         {/* TAB 2: Live Camera */}
         {activeTab === 'camera' && (
           <div className="space-y-4">
+            {/* Camera Control & Status Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white/5 p-3 rounded-2xl border border-white/10">
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${isCameraActive ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                <span className="text-xs font-bold text-white">
+                  {isCameraActive ? 'Camera đang hoạt động' : 'Camera đã tắt (Tiết kiệm pin & bảo mật)'}
+                </span>
+                <span className="text-[11px] text-slate-400 hidden sm:inline">
+                  • Tự động ngắt khi chuyển tab
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-cyan-300 bg-cyan-950/60 border border-cyan-500/30 px-2.5 py-1 rounded-xl">
+                  Đang căn: {currentTemplate?.name || 'Mẫu chuẩn'} ({activeAnchors.length} điểm neo)
+                </span>
+
+                {isCameraActive ? (
+                  <button
+                    onClick={stopCamera}
+                    className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-semibold transition cursor-pointer"
+                  >
+                    Tắt Camera
+                  </button>
+                ) : (
+                  <button
+                    onClick={startCamera}
+                    className="px-3 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Bật lại Camera
+                  </button>
+                )}
+              </div>
+            </div>
+
             {cameraError ? (
               <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs flex items-center gap-3">
                 <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" />
-                <p>{cameraError}</p>
+                <div className="flex-1">
+                  <p className="font-bold mb-1">{cameraError}</p>
+                  <button
+                    onClick={startCamera}
+                    className="mt-2 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 rounded-xl text-xs font-semibold transition cursor-pointer"
+                  >
+                    Thử kết nối lại camera
+                  </button>
+                </div>
+              </div>
+            ) : !isCameraActive ? (
+              <div className="rounded-2xl overflow-hidden bg-black/90 border border-white/10 flex flex-col items-center justify-center p-12 text-center min-h-[420px] space-y-4">
+                <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-slate-400">
+                  <Camera className="w-8 h-8" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white mb-1">Camera đang tạm dừng</h4>
+                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                    Camera được tự động tắt để bảo mật phần cứng khi bạn chuyển tab. Nhấn nút bên dưới để tiếp tục quét phiếu.
+                  </p>
+                </div>
+                <button
+                  onClick={startCamera}
+                  className="px-5 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-cyan-500/20 transition cursor-pointer flex items-center gap-2"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>Bật Camera quét bài</span>
+                </button>
               </div>
             ) : (
-              <div className="relative rounded-2xl overflow-hidden bg-black/90 border border-white/10 flex flex-col items-center justify-center min-h-[420px]">
+              <div className="relative rounded-2xl overflow-hidden bg-black/90 border border-white/10 flex flex-col items-center justify-center min-h-[440px]">
                 <video
                   ref={videoRef}
                   autoPlay
                   playsInline
                   muted
-                  className="w-full max-h-[500px] object-cover"
+                  className="w-full max-h-[520px] object-cover"
                 />
 
-                {/* Viewfinder Guide Overlay */}
-                <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
-                  <div className="w-full max-w-[360px] h-[85%] border-2 border-dashed border-cyan-400/80 rounded-2xl relative shadow-[0_0_30px_rgba(6,182,212,0.3)]">
-                    {/* 4 Corner Markers */}
-                    <div className="absolute -top-2 -left-2 w-6 h-6 border-t-4 border-l-4 border-cyan-400 rounded-tl-md" />
-                    <div className="absolute -top-2 -right-2 w-6 h-6 border-t-4 border-r-4 border-cyan-400 rounded-tr-md" />
-                    <div className="absolute -bottom-2 -left-2 w-6 h-6 border-b-4 border-l-4 border-cyan-400 rounded-bl-md" />
-                    <div className="absolute -bottom-2 -right-2 w-6 h-6 border-b-4 border-r-4 border-cyan-400 rounded-br-md" />
+                {/* Viewfinder Guide Overlay with Dynamic Anchors matching the Selected Template */}
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-3 sm:p-5">
+                  {/* Outer Sheet Aspect Ratio Container matching standard portrait A4 format */}
+                  <div className="w-full max-w-[380px] sm:max-w-[400px] aspect-[210/297] max-h-[92%] border-2 border-dashed border-cyan-400/70 rounded-xl relative shadow-[0_0_35px_rgba(6,182,212,0.25)] bg-cyan-950/5">
+                    {/* Animated Scanning Laser Line */}
+                    <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_12px_rgba(6,182,212,1)] animate-bounce opacity-75" />
 
-                    <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-semibold text-cyan-300 border border-cyan-500/30">
-                      Khung Căn Chỉnh Phiếu OMR
+                    {/* Dynamic Template Anchors rendered exactly at template coordinates */}
+                    {activeAnchors.map((anchor, idx) => {
+                      const posX = anchor.x * 100;
+                      const posY = anchor.y * 100;
+                      const isTop = anchor.y < 0.5;
+                      const isLeft = anchor.x < 0.5;
+                      const label = anchor.label || `Neo ${idx + 1} (${isTop ? 'Trên' : 'Dưới'}-${isLeft ? 'Trái' : 'Phải'})`;
+
+                      return (
+                        <div
+                          key={anchor.id || `anchor_${idx}`}
+                          className="absolute pointer-events-none transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center z-10"
+                          style={{
+                            left: `${posX}%`,
+                            top: `${posY}%`,
+                          }}
+                        >
+                          {/* Anchor Optical Box & Reticle */}
+                          <div className="relative flex items-center justify-center">
+                            {/* Optical Black Marker Square */}
+                            <div className="w-7 h-7 sm:w-8 sm:h-8 bg-black/90 border-2 border-cyan-400 rounded-sm shadow-[0_0_14px_#22d3ee] flex items-center justify-center backdrop-blur-xs">
+                              <div className="w-3 h-3 bg-cyan-400/90 rounded-xs shadow-[0_0_6px_#22d3ee]" />
+                            </div>
+
+                            {/* Precise corner reticles */}
+                            <div className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 border-t-2 border-l-2 border-emerald-400" />
+                            <div className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 border-t-2 border-r-2 border-emerald-400" />
+                            <div className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 border-b-2 border-l-2 border-emerald-400" />
+                            <div className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 border-b-2 border-r-2 border-emerald-400" />
+                          </div>
+
+                          {/* Anchor Label Tag */}
+                          <span
+                            className={`text-[9px] font-bold text-cyan-200 bg-black/90 px-1.5 py-0.5 rounded-md border border-cyan-500/40 whitespace-nowrap shadow-lg ${
+                              isTop ? 'mt-1.5' : 'mb-1.5 order-first'
+                            }`}
+                          >
+                            {label}
+                          </span>
+                        </div>
+                      );
+                    })}
+
+                    {/* Header Instruction Badge */}
+                    <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/90 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-bold text-cyan-300 border border-cyan-500/40 shadow-xl flex items-center gap-1.5 whitespace-nowrap z-20">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      Căn 4 điểm đen ở góc phiếu vào đúng 4 điểm neo của mẫu
                     </div>
                   </div>
                 </div>
 
                 {/* Floating Capture Button */}
-                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20">
+                <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3">
                   <button
                     id="btn-capture-camera"
                     onClick={handleCaptureCamera}
