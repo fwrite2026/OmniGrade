@@ -931,12 +931,16 @@ export async function processAnswerSheet(
       const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
 
       // Student ID Column Digit Recognition
-      const isColBlank = (top ? (top.fill < 0.10 && netFill < 0.04) : true);
+      const isColBlank = !top || (
+        top.fill < 0.14 ||
+        (netFill < 0.07 && top.fill < 0.28) ||
+        (margin < 0.05 && top.fill < 0.28)
+      );
       const isColMultiple = (
         !isColBlank && top && second &&
         top.fill >= 0.25 &&
         second.fill >= 0.20 &&
-        secondNetFill >= 0.10 &&
+        secondNetFill >= 0.09 &&
         margin < 0.08
       );
 
@@ -1046,12 +1050,16 @@ export async function processAnswerSheet(
       const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
 
       // Exam Code Column Digit Recognition
-      const isColBlank = (top ? (top.fill < 0.10 && netFill < 0.04) : true);
+      const isColBlank = !top || (
+        top.fill < 0.14 ||
+        (netFill < 0.07 && top.fill < 0.28) ||
+        (margin < 0.05 && top.fill < 0.28)
+      );
       const isColMultiple = (
         !isColBlank && top && second &&
         top.fill >= 0.25 &&
         second.fill >= 0.20 &&
-        secondNetFill >= 0.10 &&
+        secondNetFill >= 0.09 &&
         margin < 0.08
       );
 
@@ -1242,12 +1250,16 @@ export async function processAnswerSheet(
       let status: RecognizedAnswer['status'] = 'BLANK';
       let confidence = 95;
 
-      const isQuestionBlank = (topOpt ? (topFill < 0.10 && topNetFill < 0.04) : true);
+      const isQuestionBlank = !topOpt || (
+        topFill < 0.14 ||
+        (topNetFill < 0.07 && topFill < 0.28) ||
+        (margin < 0.05 && topFill < 0.28)
+      );
       const isQuestionMultiple = (
         !isQuestionBlank && topOpt && secondOpt &&
         topFill >= 0.25 &&
         secondFill >= 0.20 &&
-        secondNetFill >= 0.10 &&
+        secondNetFill >= 0.09 &&
         margin < 0.08
       );
 
