@@ -670,8 +670,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (sub.id !== submissionId) return sub;
 
       const exam = exams.find(e => e.id === sub.examId);
-      const qConfig = exam?.questions.find(q => q.questionNumber === questionNumber);
-      const qPoints = qConfig?.points || (exam ? exam.maxScore / exam.numQuestions : 0.25);
+      const matchedVariant = exam?.variants?.find(v => v.code.trim().toLowerCase() === (sub.appliedVariantCode || '').trim().toLowerCase());
+      const variantQuestions = matchedVariant?.questions || exam?.questions || [];
+      const qConfig = variantQuestions.find(q => q.questionNumber === questionNumber);
+      const qPoints = qConfig?.points || (exam ? exam.maxScore / (exam.numQuestions || 1) : 0.25);
 
       let correctCount = 0;
       let wrongCount = 0;
@@ -682,11 +684,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       const updatedAnswers = sub.recognizedAnswers.map(ans => {
         if (ans.questionNumber === questionNumber) {
-          const isCorrect = newOption === ans.correctAnswer;
+          const correctAns = qConfig?.correctAnswer || ans.correctAnswer;
+          const isCorrect = !!newOption && newOption === correctAns;
           const pointsEarned = isCorrect ? qPoints : 0;
           return {
             ...ans,
             selectedOption: newOption,
+            correctAnswer: correctAns,
             isCorrect,
             status: (isCorrect ? 'CORRECT' : (newOption ? 'WRONG' : 'BLANK')) as any,
             pointsEarned,
