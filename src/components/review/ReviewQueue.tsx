@@ -45,7 +45,6 @@ export const ReviewQueue: React.FC = () => {
     s.status === 'LOW_CONFIDENCE' ||
     s.status === 'STUDENT_NOT_FOUND' ||
     (s.totalMultiple && s.totalMultiple > 0) ||
-    (s.totalBlank && s.totalBlank > 0) ||
     (s.totalUncertain && s.totalUncertain > 0)
   );
 
@@ -90,24 +89,10 @@ export const ReviewQueue: React.FC = () => {
   const recognizedAnswers = currentSubmission.recognizedAnswers || [];
   const activeAnswer = recognizedAnswers.find(r => r.questionNumber === selectedQNum) || recognizedAnswers[0];
 
-  // Question filter tab state
-  const [questionFilter, setQuestionFilter] = useState<'ALL' | 'FLAGGED' | 'MULTIPLE' | 'BLANK' | 'WRONG' | 'CORRECT'>('FLAGGED');
-
-  // Flagged questions in current submission: Multiple, Blank (<60%), Uncertain, or Low Confidence
+  // Flagged questions in current submission
   const flaggedQuestionsInSub = recognizedAnswers.filter(r =>
-    r.status === 'MULTIPLE' || r.status === 'BLANK' || r.status === 'UNCERTAIN' || r.confidence < 80
+    r.status === 'MULTIPLE' || r.status === 'UNCERTAIN' || r.confidence < 75
   );
-
-  const filteredQuestions = recognizedAnswers.filter(r => {
-    if (questionFilter === 'FLAGGED') {
-      return r.status === 'MULTIPLE' || r.status === 'BLANK' || r.status === 'UNCERTAIN' || r.confidence < 80;
-    }
-    if (questionFilter === 'MULTIPLE') return r.status === 'MULTIPLE';
-    if (questionFilter === 'BLANK') return r.status === 'BLANK';
-    if (questionFilter === 'WRONG') return r.status === 'WRONG';
-    if (questionFilter === 'CORRECT') return r.status === 'CORRECT';
-    return true;
-  });
 
   const handleApplyOverride = (newOption: BubbleOption | null) => {
     overrideAnswer(currentSubmission.id, selectedQNum, newOption, overrideReason);
@@ -228,7 +213,7 @@ export const ReviewQueue: React.FC = () => {
       {/* Submissions selector pills */}
       <div className="flex items-center gap-2 overflow-x-auto pb-2">
         {submissions.map((sub) => {
-          const isFlagged = sub.status === 'NEEDS_REVIEW' || sub.status === 'MULTIPLE_ANSWERS' || sub.status === 'STUDENT_NOT_FOUND' || (sub.totalMultiple && sub.totalMultiple > 0) || (sub.totalBlank && sub.totalBlank > 0) || (sub.totalUncertain && sub.totalUncertain > 0);
+          const isFlagged = sub.status === 'NEEDS_REVIEW' || sub.status === 'MULTIPLE_ANSWERS' || sub.status === 'STUDENT_NOT_FOUND' || (sub.totalMultiple && sub.totalMultiple > 0) || (sub.totalUncertain && sub.totalUncertain > 0);
           const isSelected = sub.id === currentSubmission.id;
 
           return (
@@ -467,54 +452,6 @@ export const ReviewQueue: React.FC = () => {
             )}
           </div>
 
-          {/* Question Filter Pills */}
-          <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[11px]">
-            <button
-              type="button"
-              onClick={() => setQuestionFilter('FLAGGED')}
-              className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer whitespace-nowrap ${
-                questionFilter === 'FLAGGED'
-                  ? 'bg-amber-500 text-black shadow-xs'
-                  : 'bg-white/5 text-amber-300 hover:bg-white/10'
-              }`}
-            >
-              Cần duyệt ({flaggedQuestionsInSub.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setQuestionFilter('MULTIPLE')}
-              className={`px-2 py-1 rounded-lg font-semibold transition cursor-pointer whitespace-nowrap ${
-                questionFilter === 'MULTIPLE'
-                  ? 'bg-amber-600 text-black shadow-xs'
-                  : 'bg-white/5 text-slate-300 hover:bg-white/10'
-              }`}
-            >
-              Tô nhiều (≥60%)
-            </button>
-            <button
-              type="button"
-              onClick={() => setQuestionFilter('BLANK')}
-              className={`px-2 py-1 rounded-lg font-semibold transition cursor-pointer whitespace-nowrap ${
-                questionFilter === 'BLANK'
-                  ? 'bg-rose-600 text-white shadow-xs'
-                  : 'bg-white/5 text-slate-300 hover:bg-white/10'
-              }`}
-            >
-              Bỏ trống (&lt;60%)
-            </button>
-            <button
-              type="button"
-              onClick={() => setQuestionFilter('ALL')}
-              className={`px-2 py-1 rounded-lg font-semibold transition cursor-pointer whitespace-nowrap ${
-                questionFilter === 'ALL'
-                  ? 'bg-cyan-600 text-white shadow-xs'
-                  : 'bg-white/5 text-slate-300 hover:bg-white/10'
-              }`}
-            >
-              Tất cả ({recognizedAnswers.length})
-            </button>
-          </div>
-
           {/* Flagged issues alert */}
           {flaggedQuestionsInSub.length > 0 && (
             <div className="p-3 bg-amber-950/40 rounded-2xl border border-amber-500/30 text-xs text-amber-300 space-y-1">
@@ -527,20 +464,20 @@ export const ReviewQueue: React.FC = () => {
                   <button
                     key={fq.questionNumber}
                     onClick={() => setSelectedQNum(fq.questionNumber)}
-                    className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold hover:bg-amber-500/30 transition cursor-pointer text-[11px]"
+                    className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold hover:bg-amber-500/30 transition cursor-pointer"
                   >
-                    Câu {fq.questionNumber} ({fq.status === 'BLANK' ? 'Trống <60%' : fq.status === 'MULTIPLE' ? 'Nhiều ≥60%' : fq.status})
+                    Câu {fq.questionNumber} ({fq.status})
                   </button>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Filtered question grid list */}
+          {/* Full question grid list */}
           <div className="space-y-1 max-h-[380px] overflow-y-auto pr-1">
-            {filteredQuestions.map((ans) => {
+            {recognizedAnswers.map((ans) => {
               const isSelected = ans.questionNumber === selectedQNum;
-              const isFlagged = ans.status === 'MULTIPLE' || ans.status === 'BLANK' || ans.status === 'UNCERTAIN' || ans.confidence < 80;
+              const isFlagged = ans.status === 'MULTIPLE' || ans.status === 'UNCERTAIN';
 
               return (
                 <div
@@ -559,15 +496,11 @@ export const ReviewQueue: React.FC = () => {
                     <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[11px] ${
                       ans.isCorrect
                         ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
-                        : ans.status === 'MULTIPLE'
-                        ? 'bg-amber-950/60 text-amber-300 border border-amber-500/30'
-                        : ans.status === 'BLANK'
-                        ? 'bg-rose-950/60 text-rose-300 border border-rose-500/30'
                         : ans.selectedOption
                         ? 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
                         : 'bg-white/10 text-slate-400'
                     }`}>
-                      {ans.status === 'MULTIPLE' ? '?' : ans.status === 'BLANK' ? '—' : ans.selectedOption || '—'}
+                      {ans.selectedOption || '—'}
                     </span>
                     <span className="text-[11px] text-slate-400 font-mono">
                       (ĐA: {ans.correctAnswer})
@@ -582,15 +515,13 @@ export const ReviewQueue: React.FC = () => {
                     )}
 
                     <span className={`text-[11px] font-semibold ${
-                      ans.status === 'MULTIPLE'
+                      isFlagged
                         ? 'text-amber-400'
-                        : ans.status === 'BLANK'
-                        ? 'text-rose-400'
                         : ans.isCorrect
                         ? 'text-emerald-400'
                         : 'text-slate-400'
                     }`}>
-                      {ans.status === 'BLANK' ? 'Trống (<60%)' : ans.status === 'MULTIPLE' ? 'Tô nhiều (≥60%)' : ans.status}
+                      {ans.status} ({ans.confidence}%)
                     </span>
                   </div>
                 </div>
@@ -613,11 +544,9 @@ export const ReviewQueue: React.FC = () => {
                       ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
                       : activeAnswer?.status === 'WRONG'
                       ? 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
-                      : activeAnswer?.status === 'MULTIPLE'
-                      ? 'bg-amber-950/60 text-amber-400 border border-amber-500/30'
-                      : 'bg-rose-950/60 text-rose-300 border border-rose-500/30'
+                      : 'bg-amber-950/60 text-amber-400 border border-amber-500/30'
                   }`}>
-                    {activeAnswer?.status === 'BLANK' ? 'BỎ TRỐNG (<60%) - CẦN DUYỆT' : activeAnswer?.status === 'MULTIPLE' ? 'TÔ NHIỀU ĐÁP ÁN (≥60%) - CẦN DUYỆT' : activeAnswer?.status}
+                    {activeAnswer?.status} (Độ tin cậy {activeAnswer?.confidence ?? 95}%)
                   </span>
                 </h3>
               </div>
@@ -639,27 +568,6 @@ export const ReviewQueue: React.FC = () => {
                 </button>
               </div>
             </div>
-
-            {/* Contextual Warning Banner for BLANK or MULTIPLE */}
-            {activeAnswer?.status === 'BLANK' && (
-              <div className="p-3 rounded-2xl bg-rose-950/30 border border-rose-500/30 flex items-start gap-2.5 text-xs text-rose-200">
-                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                <div>
-                  <strong className="text-white block">Câu hỏi có tất cả các ô dưới 60% mật độ tô:</strong>
-                  <span>Hệ thống OMR tự động đánh dấu <strong>BỎ TRỐNG (0 điểm)</strong>. Vui lòng đối chiếu ảnh chụp thực tế bên dưới để xác nhận hoặc chấm điểm thủ công nếu phát hiện thí sinh có tô chì.</span>
-                </div>
-              </div>
-            )}
-
-            {activeAnswer?.status === 'MULTIPLE' && (
-              <div className="p-3 rounded-2xl bg-amber-950/30 border border-amber-500/30 flex items-start gap-2.5 text-xs text-amber-200">
-                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                <div>
-                  <strong className="text-white block">Phát hiện từ 2 đáp án trở lên có mật độ tô ≥ 60%:</strong>
-                  <span>Hệ thống OMR tự động đánh dấu <strong>TÔ NHIỀU ĐÁP ÁN (0 điểm - MULTIPLE)</strong>. Giáo viên có thể duyệt hủy điểm hoặc chọn 1 đáp án chính thức nếu thí sinh tẩy chưa sạch.</span>
-                </div>
-              </div>
-            )}
 
             {/* High-Resolution Cropped Question Area */}
             {activeAnswer?.cropImageUrl && (
@@ -687,20 +595,15 @@ export const ReviewQueue: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {/* Left: OMR Machine Interpretation */}
               <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                    Mật độ điểm ảnh OMR (Fill Density):
-                  </span>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                    Ngưỡng chọn: ≥ 60%
-                  </span>
-                </div>
+                <span className="text-xs font-bold text-slate-300 block uppercase tracking-wider">
+                  Mật độ điểm ảnh OMR (Fill Density):
+                </span>
 
                 <div className="space-y-2.5">
                   {['A', 'B', 'C', 'D'].map((opt) => {
                     const ratio = activeAnswer?.fillRatios?.[opt] || 0.02;
-                    const isFilled = ratio >= 0.60;
-                    const isUnderThreshold = ratio > 0.05 && ratio < 0.60;
+                    const isFilled = ratio >= 0.32;
+                    const isUncertain = ratio >= 0.16 && ratio < 0.32;
 
                     return (
                       <div key={opt} className="space-y-1">
@@ -709,28 +612,14 @@ export const ReviewQueue: React.FC = () => {
                             <span className="w-5 h-5 rounded-full bg-white/10 border border-white/15 flex items-center justify-center font-bold text-[11px] text-cyan-300">
                               {opt}
                             </span>
-                            {isFilled ? (
-                              <span className="text-emerald-400 font-bold">Đã tô chọn (≥ 60%)</span>
-                            ) : isUnderThreshold ? (
-                              <span className="text-amber-400 text-[11px]">Dưới 60% (Trống - Cần duyệt)</span>
-                            ) : (
-                              <span className="text-slate-500">Trống (&lt;5%)</span>
-                            )}
+                            {isFilled ? 'Đã tô đậm' : isUncertain ? 'Tô mờ / Nghi vấn' : 'Trống'}
                           </span>
-                          <span className={`font-mono text-xs ${isFilled ? 'text-emerald-300 font-bold' : isUnderThreshold ? 'text-amber-300' : 'text-slate-400'}`}>
-                            {(ratio * 100).toFixed(1)}%
-                          </span>
+                          <span className="font-mono text-slate-400">{(ratio * 100).toFixed(1)}%</span>
                         </div>
-                        <div className="w-full h-2.5 bg-white/10 rounded-full overflow-hidden relative">
-                          {/* 60% threshold benchmark vertical guide */}
-                          <div
-                            className="absolute top-0 bottom-0 w-0.5 bg-amber-400/80 z-10"
-                            style={{ left: '60%' }}
-                            title="Ngưỡng chọn chuẩn: 60%"
-                          />
+                        <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full transition-all ${
-                              isFilled ? 'bg-emerald-500' : isUnderThreshold ? 'bg-amber-500/70' : 'bg-slate-700'
+                              isFilled ? 'bg-cyan-500' : isUncertain ? 'bg-amber-500' : 'bg-slate-700'
                             }`}
                             style={{ width: `${Math.min(100, ratio * 100)}%` }}
                           />

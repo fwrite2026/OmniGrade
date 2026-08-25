@@ -483,7 +483,7 @@ export const ScanInspectionModal: React.FC<ScanInspectionModalProps> = ({
                   {template?.numQuestions || 60} Câu • {template?.columnsCount || 4} Cột
                 </span>
               </div>
-              <div className="grid grid-cols-4 gap-1.5 text-center">
+              <div className="grid grid-cols-3 gap-2 text-center">
                 <div className="bg-black/40 p-2 rounded-xl border border-cyan-500/20">
                   <p className="text-[10px] text-slate-400">Đúng</p>
                   <p className="text-sm font-bold text-emerald-400">{submission.totalCorrect}</p>
@@ -493,15 +493,9 @@ export const ScanInspectionModal: React.FC<ScanInspectionModalProps> = ({
                   <p className="text-sm font-bold text-rose-400">{submission.totalWrong}</p>
                 </div>
                 <div className="bg-black/40 p-2 rounded-xl border border-cyan-500/20">
-                  <p className="text-[10px] text-slate-400">Trống (&lt;60%)</p>
-                  <p className="text-sm font-bold text-rose-300">
-                    {submission.totalBlank}
-                  </p>
-                </div>
-                <div className="bg-black/40 p-2 rounded-xl border border-cyan-500/20">
-                  <p className="text-[10px] text-slate-400">Nhiều (≥60%)</p>
+                  <p className="text-[10px] text-slate-400">Chưa tô / Lỗi</p>
                   <p className="text-sm font-bold text-amber-400">
-                    {submission.totalMultiple}
+                    {submission.totalBlank + submission.totalMultiple + submission.totalUncertain}
                   </p>
                 </div>
               </div>
