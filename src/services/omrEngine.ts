@@ -1235,7 +1235,7 @@ export async function processAnswerSheet(
       let confidence = 95;
 
       if (filledOptions.length > 1) {
-        // RULE 1: MULTIPLE OPTIONS FILLED (>= 60% on 2 or more options)
+        // RULE 1: MULTIPLE OPTIONS FILLED (>= 60% on 2 or more options) -> Needs review
         status = 'MULTIPLE';
         selectedOption = null;
         selectedOptions = filledOptions.map(f => f[0]);
@@ -1248,20 +1248,17 @@ export async function processAnswerSheet(
         confidence = Math.min(99, Math.round(85 + filledOptions[0][1].fillRatio * 14));
         status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
       } else {
-        // RULE 3: No option >= 60% -> Check for borderline single mark vs pure BLANK
-        if (topOpt && topFill >= 0.48 && (topFill - secondFill) >= 0.22) {
-          selectedOption = topOpt[0];
-          selectedOptions = [selectedOption];
-          confidence = Math.round(75 + topFill * 20);
-          status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
+        // RULE 3: Fill density under 60% (< 0.60) is marked as BLANK and needs review
+        selectedOption = null;
+        selectedOptions = [];
+        status = 'BLANK';
+        // If there was a faint mark (e.g. 0.20 - 0.59), reflect in confidence
+        if (topOpt && topFill >= 0.20) {
+          confidence = Math.max(50, Math.round(85 - topFill * 40));
         } else {
-          // Genuinely BLANK
-          selectedOption = null;
-          selectedOptions = [];
-          status = 'BLANK';
           confidence = 98;
-          totalBlank++;
         }
+        totalBlank++;
       }
 
       // If status is MULTIPLE or BLANK, it can NEVER be correct or awarded points!
@@ -1324,12 +1321,18 @@ export async function processAnswerSheet(
   if (variantMismatch) {
     overallStatus = 'NEEDS_REVIEW';
     reviewReason = `Mã đề nhận diện "${detectedExamCode || 'Trống'}" không khớp danh sách mã đề của kỳ thi (${exam?.variants?.map(v => v.code).join(', ')})`;
+  } else if (totalMultiple > 0 && totalBlank > 0) {
+    overallStatus = 'NEEDS_REVIEW';
+    reviewReason = `${totalMultiple} câu tô nhiều đáp án (≥ 60%), ${totalBlank} câu bỏ trống (< 60%) cần duyệt`;
   } else if (totalMultiple > 0) {
     overallStatus = 'NEEDS_REVIEW';
-    reviewReason = `${totalMultiple} câu tô nhiều đáp án`;
+    reviewReason = `${totalMultiple} câu tô nhiều đáp án (≥ 60%) cần duyệt`;
+  } else if (totalBlank > 0) {
+    overallStatus = 'NEEDS_REVIEW';
+    reviewReason = `${totalBlank} câu bỏ trống (mật độ tô < 60%) cần duyệt`;
   } else if (totalUncertain > 0) {
     overallStatus = 'NEEDS_REVIEW';
-    reviewReason = `${totalUncertain} câu tô mờ/nghi ngờ`;
+    reviewReason = `${totalUncertain} câu tô mờ/nghi ngờ cần duyệt`;
   } else if (!matchedStudent && detectedStudentId && !detectedStudentId.includes('_')) {
     overallStatus = 'STUDENT_NOT_FOUND';
     reviewReason = `SBD "${detectedStudentId}" chưa có trong danh sách thí sinh`;
