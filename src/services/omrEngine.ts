@@ -612,8 +612,8 @@ export function analyzeBubbleFill(
     const imgCropData = ctx.getImageData(cropX, cropY, cropW, cropH);
     cropCtx.putImageData(imgCropData, 0, 0);
 
-    // Extract extended patch (3.6 * radius) to cover bubble + surrounding paper ring
-    const patchRadius = Math.round(baseRadius * 1.8);
+    // Extract patch (3.4 * radius) to cover bubble + surrounding paper ring
+    const patchRadius = Math.round(baseRadius * 1.7);
     const patchSize = patchRadius * 2;
     const patchStartX = Math.max(0, Math.min(ctx.canvas.width - patchSize, Math.round(rawCenterX - patchRadius)));
     const patchStartY = Math.max(0, Math.min(ctx.canvas.height - patchSize, Math.round(rawCenterY - patchRadius)));
@@ -634,8 +634,8 @@ export function analyzeBubbleFill(
     const localCenterX = rawCenterX - patchStartX;
     const localCenterY = rawCenterY - patchStartY;
 
-    // 1. Calculate local paper background from surrounding annulus (1.25r to 1.65r)
-    const bgInnerRadiusSq = (baseRadius * 1.25) * (baseRadius * 1.25);
+    // 1. Calculate local paper background from surrounding annulus (1.30r to 1.65r)
+    const bgInnerRadiusSq = (baseRadius * 1.30) * (baseRadius * 1.30);
     const bgOuterRadiusSq = (baseRadius * 1.65) * (baseRadius * 1.65);
 
     let bgLumSum = 0;
@@ -648,34 +648,41 @@ export function analyzeBubbleFill(
         const distSq = dx * dx + dy * dy;
 
         if (distSq >= bgInnerRadiusSq && distSq <= bgOuterRadiusSq) {
-          bgLumSum += lumGrid[py * patchW + px];
-          bgCount++;
+          const lum = lumGrid[py * patchW + px];
+          // Discard unusually dark pixels outside (e.g. text from neighboring labels)
+          if (lum >= 140) {
+            bgLumSum += lum;
+            bgCount++;
+          }
         }
       }
     }
 
     const localPaperLum = bgCount > 0 ? (bgLumSum / bgCount) : 240;
 
-    // 2. Micro-alignment offset search (tested in a generous grid up to ±6px to lock onto true bubble center)
-    const searchStep = 3;
-    const maxOffset = Math.min(8, Math.max(3, Math.round(baseRadius * 0.45)));
-    const testOffsets: { ox: number; oy: number }[] = [];
-    for (let oy = -maxOffset; oy <= maxOffset; oy += searchStep) {
-      for (let ox = -maxOffset; ox <= maxOffset; ox += searchStep) {
-        testOffsets.push({ ox, oy });
-      }
-    }
-
-    const innerRadius = baseRadius * 0.76;
+    // 2. Safe inner disc radius: 0.65 * baseRadius strictly avoids outer printed circular border line
+    const innerRadius = baseRadius * 0.65;
     const innerRadiusSq = innerRadius * innerRadius;
-    const coreRadius = baseRadius * 0.40;
+    const coreRadius = innerRadius * 0.45;
     const coreRadiusSq = coreRadius * coreRadius;
 
     // Relative thresholds to local paper brightness
-    const darkDelta = Math.max(22, localPaperLum * 0.12);
-    const deepDarkDelta = Math.max(45, localPaperLum * 0.25);
-    const darkThreshold = Math.max(10, localPaperLum - darkDelta);
-    const deepDarkThreshold = Math.max(5, localPaperLum - deepDarkDelta);
+    const faintDelta = Math.max(14, localPaperLum * 0.07);
+    const mediumDelta = Math.max(28, localPaperLum * 0.14);
+    const darkDelta = Math.max(55, localPaperLum * 0.28);
+
+    const faintThreshold = Math.max(10, localPaperLum - faintDelta);
+    const mediumThreshold = Math.max(8, localPaperLum - mediumDelta);
+    const darkThreshold = Math.max(5, localPaperLum - darkDelta);
+
+    // Micro-alignment: test small subpixel offset within +/- 1.5px only (never leaves inner disc)
+    const testOffsets = [
+      { ox: 0, oy: 0 },
+      { ox: -1.5, oy: 0 },
+      { ox: 1.5, oy: 0 },
+      { ox: 0, oy: -1.5 },
+      { ox: 0, oy: 1.5 }
+    ];
 
     let bestFillScore = 0;
     let bestCoreFill = 0;
@@ -686,11 +693,19 @@ export function analyzeBubbleFill(
       const cy = localCenterY + offset.oy;
 
       let innerTotal = 0;
-      let innerDark = 0;
-      let innerDeepDark = 0;
+      let faintCount = 0;
+      let mediumCount = 0;
+      let darkCount = 0;
       let innerLumSum = 0;
+
+      // 4 Quadrants to verify spatial coverage across the whole circle
+      const qTotal = [0, 0, 0, 0];
+      const qFaint = [0, 0, 0, 0];
+      const qMedium = [0, 0, 0, 0];
+
       let coreTotal = 0;
-      let coreDark = 0;
+      let coreFaint = 0;
+      let coreMedium = 0;
 
       for (let py = 0; py < patchH; py++) {
         for (let px = 0; px < patchW; px++) {
@@ -703,18 +718,26 @@ export function analyzeBubbleFill(
             innerTotal++;
             innerLumSum += lum;
 
+            // Determine quadrant (0: TR, 1: TL, 2: BL, 3: BR)
+            const qIdx = dx >= 0 ? (dy < 0 ? 0 : 3) : (dy < 0 ? 1 : 2);
+            qTotal[qIdx]++;
+
+            if (lum < faintThreshold) {
+              faintCount++;
+              qFaint[qIdx]++;
+            }
+            if (lum < mediumThreshold) {
+              mediumCount++;
+              qMedium[qIdx]++;
+            }
             if (lum < darkThreshold) {
-              innerDark++;
-              if (lum < deepDarkThreshold) {
-                innerDeepDark++;
-              }
+              darkCount++;
             }
 
             if (distSq <= coreRadiusSq) {
               coreTotal++;
-              if (lum < darkThreshold) {
-                coreDark++;
-              }
+              if (lum < faintThreshold) coreFaint++;
+              if (lum < mediumThreshold) coreMedium++;
             }
           }
         }
@@ -722,35 +745,46 @@ export function analyzeBubbleFill(
 
       if (innerTotal === 0) continue;
 
-      const darkRatio = innerDark / innerTotal;
-      const deepDarkRatio = innerDeepDark / innerTotal;
-      const coreDarkRatio = coreTotal > 0 ? (coreDark / coreTotal) : 0;
+      const faintRatio = faintCount / innerTotal;
+      const mediumRatio = mediumCount / innerTotal;
+      const darkRatio = darkCount / innerTotal;
       const meanLum = innerLumSum / innerTotal;
       const meanDropFraction = Math.max(0, (localPaperLum - meanLum) / Math.max(1, localPaperLum));
 
-      // Font line baseline suppression:
-      // Thin printed font letters/digits occupy ~0.04-0.09 of inner pixels with drop ~0.05.
-      // Genuine student pencil/pen shading occupies >= 0.35-0.95 with drop >= 0.20-0.70.
+      const qFaintRatios = qTotal.map((t, idx) => t > 0 ? (qFaint[idx] / t) : 0);
+      const minQuadFaint = Math.min(...qFaintRatios);
+      const activeQuads = qFaintRatios.filter(r => r >= 0.25).length;
+
+      const coreFaintRatio = coreTotal > 0 ? (coreFaint / coreTotal) : 0;
+
       let fillScore = 0;
-      if (darkRatio < 0.11 && meanDropFraction < 0.10) {
-        fillScore = Math.max(0, darkRatio * 0.75); // Clean empty circle: 0.00 - 0.08
-      } else {
-        // Normalized coverage factors
-        const densityFactor = Math.min(1.0, Math.max(0, (darkRatio - 0.05) / 0.65));
-        const contrastFactor = Math.min(1.0, Math.max(0, (meanDropFraction - 0.05) / 0.40));
-        const coreFactor = Math.min(1.0, Math.max(0, (coreDarkRatio - 0.05) / 0.60));
 
-        fillScore = 0.50 * densityFactor + 0.30 * contrastFactor + 0.20 * coreFactor;
-
-        // When student fills the bubble with pencil/pen, scale into 0.60 - 1.00 range
-        if (darkRatio >= 0.32 || deepDarkRatio >= 0.15) {
-          fillScore = Math.max(0.60, Math.min(1.0, fillScore * 1.15 + deepDarkRatio * 0.20));
-        }
+      // CASE 1: Empty bubble containing ONLY thin printed font letters (A, B, C, D) or digits (0-9)
+      // Letter strokes occupy <= 12% pixels, leaving at least 2 quadrants empty.
+      if (faintRatio < 0.16 || (faintRatio < 0.22 && minQuadFaint < 0.08 && activeQuads <= 2)) {
+        fillScore = Math.max(0, faintRatio * 0.40); // Low density: 0.00 - 0.08
+      }
+      // CASE 2: Solid Dark Shading (Tô kín và đậm)
+      else if (darkRatio >= 0.35 || (mediumRatio >= 0.50 && minQuadFaint >= 0.45)) {
+        fillScore = Math.min(1.0, 0.80 + darkRatio * 0.20); // High density: 0.85 - 1.00 (>= 60%)
+      }
+      // CASE 3: Fully Shaded Circle, even if faint/light pencil (Tô kín ô nhưng hơi mờ)
+      // Shading covers across all 4 quadrants (minQuadFaint >= 0.28, faintRatio >= 0.55, core covered)
+      else if (faintRatio >= 0.55 && minQuadFaint >= 0.28 && activeQuads >= 3) {
+        const spatialCov = 0.50 * faintRatio + 0.30 * minQuadFaint + 0.20 * coreFaintRatio;
+        // User specification: tô kín ô nhưng hơi mờ -> xác định mức density cao (>= 60%)
+        fillScore = Math.max(0.62, Math.min(1.0, 0.40 + spatialCov * 0.55 + mediumRatio * 0.20));
+      }
+      // CASE 4: Partially Shaded Bubble (Tô nhưng không kín ô)
+      // Shading does not cover the full circle -> density is proportional to actual coverage
+      else {
+        const partialScore = faintRatio * 0.60 + (activeQuads / 4) * 0.25 + coreFaintRatio * 0.15;
+        fillScore = Math.min(0.54, Math.max(0.10, partialScore)); // Proportional density (< 60%)
       }
 
       if (fillScore > bestFillScore) {
         bestFillScore = fillScore;
-        bestCoreFill = coreDarkRatio;
+        bestCoreFill = coreFaintRatio;
         bestContrast = meanDropFraction;
       }
     }
