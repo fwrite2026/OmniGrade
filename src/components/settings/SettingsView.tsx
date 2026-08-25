@@ -19,6 +19,7 @@ import {
   FileJson
 } from 'lucide-react';
 import { DEFAULT_120_TEMPLATE } from '../../services/demoData';
+import { safeLocalStorageSet } from '../../services/imageStorage';
 
 interface SettingsViewProps {
   onNavigate?: (tab: string) => void;
@@ -96,11 +97,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
   const handleResetDemo = () => {
     if (window.confirm('Bạn có chắc chắn muốn đặt lại hệ thống về trạng thái phiếu chuẩn 120 câu? Hành động này sẽ xóa các bài thi hiện tại.')) {
       resetToDemoData();
-      localStorage.setItem('omr_templates', JSON.stringify([DEFAULT_120_TEMPLATE]));
-      localStorage.setItem('omr_exams', JSON.stringify([]));
-      localStorage.setItem('omr_submissions', JSON.stringify([]));
-      localStorage.setItem('omr_students', JSON.stringify([]));
-      localStorage.setItem('omr_classes', JSON.stringify([]));
+      safeLocalStorageSet('omr_templates', JSON.stringify([DEFAULT_120_TEMPLATE]));
+      safeLocalStorageSet('omr_exams', JSON.stringify([]));
+      safeLocalStorageSet('omr_submissions', JSON.stringify([]));
+      safeLocalStorageSet('omr_students', JSON.stringify([]));
+      safeLocalStorageSet('omr_classes', JSON.stringify([]));
       window.location.reload();
     }
   };

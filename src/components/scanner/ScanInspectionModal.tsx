@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ExamSubmission, AnswerSheetTemplate, BubbleOption } from '../../types';
+import { loadSubmissionImage } from '../../services/imageStorage';
 import {
   X,
   Crosshair,
@@ -38,27 +39,33 @@ export const ScanInspectionModal: React.FC<ScanInspectionModalProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
-    if (!isOpen || !submission.scannedImageUrl) return;
+    if (!isOpen || (!submission.scannedImageUrl && !submission.id)) return;
 
+    let isMounted = true;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = submission.scannedImageUrl;
-    img.onload = () => {
-      const targetWidth = 1000;
-      const targetHeight = Math.round((img.height / img.width) * targetWidth) || 1414;
-      canvas.width = targetWidth;
-      canvas.height = targetHeight;
+    const render = async () => {
+      const resolvedSrc = (await loadSubmissionImage(submission.scannedImageUrl || submission.id)) || submission.scannedImageUrl;
+      if (!resolvedSrc || !isMounted) return;
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = resolvedSrc;
+      img.onload = () => {
+        if (!isMounted) return;
+        const targetWidth = 1000;
+        const targetHeight = Math.round((img.height / img.width) * targetWidth) || 1414;
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
 
-      // Draw background image
-      ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
 
-      const zones = template?.zones || [];
+        // Draw background image
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+        const zones = template?.zones || [];
 
       // 1. Draw 4 Corner Anchors if enabled
       if (showAnchors) {
@@ -254,16 +261,23 @@ export const ScanInspectionModal: React.FC<ScanInspectionModalProps> = ({
         });
       }
     };
-  }, [
-    isOpen,
-    submission,
-    template,
-    showAnchors,
-    showSbdFrame,
-    showExamCodeFrame,
-    showQuestionFrame,
-    showBubbles
-  ]);
+  };
+
+  render();
+
+  return () => {
+    isMounted = false;
+  };
+}, [
+  isOpen,
+  submission,
+  template,
+  showAnchors,
+  showSbdFrame,
+  showExamCodeFrame,
+  showQuestionFrame,
+  showBubbles
+]);
 
   if (!isOpen) return null;
 

@@ -15,7 +15,16 @@ import {
 } from '../types';
 import { translations } from '../locales/translations';
 import { DEFAULT_120_TEMPLATE, DEMO_TEMPLATES, DEFAULT_USERS } from '../services/demoData';
-import { saveTemplateImage, deleteTemplateImage } from '../services/imageStorage';
+import {
+  saveTemplateImage,
+  loadTemplateImage,
+  deleteTemplateImage,
+  saveSubmissionImage,
+  loadSubmissionImage,
+  deleteSubmissionImage,
+  safeLocalStorageSet,
+  safeLocalStorageGet
+} from '../services/imageStorage';
 
 interface AppContextType {
   language: Language;
@@ -222,57 +231,54 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
 
   const [submissions, setSubmissions] = useState<ExamSubmission[]>(() => {
-    const saved = localStorage.getItem('omr_submissions');
-    if (saved !== null) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-      } catch (e) {
-        console.error('Error loading saved submissions', e);
-      }
-    }
-    return [];
+    return safeLocalStorageGet<ExamSubmission[]>('omr_submissions', []);
   });
 
-  const [students, setStudents] = useState<Student[]>(() => {
-    const saved = localStorage.getItem('omr_students');
-    if (saved !== null) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-      } catch (e) {
-        console.error('Error loading saved students', e);
+  // Re-hydrate any IndexedDB stored scanned images for submissions
+  useEffect(() => {
+    let isSubscribed = true;
+    const rehydrateSubmissions = async () => {
+      let changed = false;
+      const updated = await Promise.all(
+        submissions.map(async (sub) => {
+          if (!sub.scannedImageUrl || sub.scannedImageUrl.startsWith('data:') || sub.scannedImageUrl.startsWith('http')) {
+            return sub;
+          }
+          const loaded = await loadSubmissionImage(sub.scannedImageUrl || sub.id);
+          if (loaded && loaded !== sub.scannedImageUrl) {
+            changed = true;
+            return { ...sub, scannedImageUrl: loaded };
+          }
+          return sub;
+        })
+      );
+      if (isSubscribed && changed) {
+        setSubmissions(updated);
       }
+    };
+    if (submissions.length > 0) {
+      rehydrateSubmissions();
     }
-    return [];
+    return () => {
+      isSubscribed = false;
+    };
+  }, []);
+
+  const [students, setStudents] = useState<Student[]>(() => {
+    return safeLocalStorageGet<Student[]>('omr_students', []);
   });
 
   const [classes, setClasses] = useState<SchoolClass[]>(() => {
-    const saved = localStorage.getItem('omr_classes');
-    if (saved !== null) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-      } catch (e) {
-        console.error('Error loading saved classes', e);
-      }
-    }
-    return [];
+    return safeLocalStorageGet<SchoolClass[]>('omr_classes', []);
   });
 
-  // Sync to LocalStorage
+  // Sync to LocalStorage safely with QuotaExceededError protection
   useEffect(() => {
-    localStorage.setItem('omr_lang', language);
+    safeLocalStorageSet('omr_lang', language);
   }, [language]);
 
   useEffect(() => {
-    localStorage.setItem('omr_school_name', schoolName);
+    safeLocalStorageSet('omr_school_name', schoolName);
   }, [schoolName]);
 
   useEffect(() => {
@@ -290,7 +296,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
         return tpl;
       });
-      localStorage.setItem('omr_templates', JSON.stringify(safeTemplates));
+      safeLocalStorageSet('omr_templates', JSON.stringify(safeTemplates));
     } catch (e) {
       console.warn('LocalStorage templates sync fallback:', e);
     }
@@ -298,43 +304,70 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   useEffect(() => {
     if (activeTemplateId) {
-      localStorage.setItem('omr_active_template_id', activeTemplateId);
+      safeLocalStorageSet('omr_active_template_id', activeTemplateId);
     } else {
       localStorage.removeItem('omr_active_template_id');
     }
   }, [activeTemplateId]);
 
   useEffect(() => {
-    localStorage.setItem('omr_exams', JSON.stringify(exams));
+    safeLocalStorageSet('omr_exams', JSON.stringify(exams));
   }, [exams]);
 
   useEffect(() => {
     if (activeExamId) {
-      localStorage.setItem('omr_active_exam_id', activeExamId);
+      safeLocalStorageSet('omr_active_exam_id', activeExamId);
     } else {
       localStorage.removeItem('omr_active_exam_id');
     }
   }, [activeExamId]);
 
   useEffect(() => {
-    localStorage.setItem('omr_submissions', JSON.stringify(submissions));
+    try {
+      // Offload large scanned images to IndexedDB and keep localStorage lightweight (< 50KB)
+      const safeSubmissions = submissions.map(sub => {
+        if (sub.scannedImageUrl && sub.scannedImageUrl.startsWith('data:') && sub.scannedImageUrl.length > 20000) {
+          saveSubmissionImage(sub.id, sub.scannedImageUrl).catch(() => {});
+          return {
+            ...sub,
+            scannedImageUrl: sub.id, // Store ID key reference in localStorage
+            processedImageUrl: undefined,
+            recognizedAnswers: (sub.recognizedAnswers || []).map(ans => ({
+              ...ans,
+              cropImageUrl: undefined // Remove heavy crop snippets from localStorage JSON
+            }))
+          };
+        }
+        return {
+          ...sub,
+          processedImageUrl: undefined,
+          recognizedAnswers: (sub.recognizedAnswers || []).map(ans => ({
+            ...ans,
+            cropImageUrl: undefined
+          }))
+        };
+      });
+      safeLocalStorageSet('omr_submissions', JSON.stringify(safeSubmissions));
+    } catch (e) {
+      console.warn('LocalStorage submissions sync fallback:', e);
+    }
   }, [submissions]);
 
   useEffect(() => {
-    localStorage.setItem('omr_students', JSON.stringify(students));
+    safeLocalStorageSet('omr_students', JSON.stringify(students));
   }, [students]);
 
   useEffect(() => {
-    localStorage.setItem('omr_classes', JSON.stringify(classes));
+    safeLocalStorageSet('omr_classes', JSON.stringify(classes));
   }, [classes]);
 
   useEffect(() => {
-    localStorage.setItem('omr_users', JSON.stringify(users));
+    safeLocalStorageSet('omr_users', JSON.stringify(users));
   }, [users]);
 
   useEffect(() => {
     if (currentUser) {
-      localStorage.setItem('omr_current_user', JSON.stringify(currentUser));
+      safeLocalStorageSet('omr_current_user', JSON.stringify(currentUser));
     } else {
       localStorage.removeItem('omr_current_user');
     }
@@ -810,11 +843,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteSubmission = (id: string) => {
+    deleteSubmissionImage(id).catch(() => {});
     setSubmissions(prev => prev.filter(s => s.id !== id));
   };
 
   const deleteSubmissionsBatch = (ids: string[]) => {
     const idSet = new Set(ids);
+    ids.forEach(id => deleteSubmissionImage(id).catch(() => {}));
     setSubmissions(prev => prev.filter(s => !idSet.has(s.id)));
   };
 
@@ -1004,14 +1039,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       if (data.schoolName && typeof data.schoolName === 'string') {
         setSchoolName(data.schoolName);
-        localStorage.setItem('omr_school_name', data.schoolName);
+        safeLocalStorageSet('omr_school_name', data.schoolName);
       }
 
       if (data.users) {
         const parsedUsers = typeof data.users === 'string' ? JSON.parse(data.users) : data.users;
         if (Array.isArray(parsedUsers)) {
           setUsers(parsedUsers);
-          localStorage.setItem('omr_users', JSON.stringify(parsedUsers));
+          safeLocalStorageSet('omr_users', JSON.stringify(parsedUsers));
         }
       }
 
@@ -1019,7 +1054,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const parsedTemplates = typeof data.templates === 'string' ? JSON.parse(data.templates) : data.templates;
         if (Array.isArray(parsedTemplates)) {
           setTemplates(parsedTemplates);
-          localStorage.setItem('omr_templates', JSON.stringify(parsedTemplates));
           if (parsedTemplates[0]?.id) {
             setActiveTemplateId(parsedTemplates[0].id);
           }
@@ -1030,7 +1064,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const parsedExams = typeof data.exams === 'string' ? JSON.parse(data.exams) : data.exams;
         if (Array.isArray(parsedExams)) {
           setExams(parsedExams);
-          localStorage.setItem('omr_exams', JSON.stringify(parsedExams));
+          safeLocalStorageSet('omr_exams', JSON.stringify(parsedExams));
           if (parsedExams[0]?.id) {
             setActiveExamId(parsedExams[0].id);
           }
@@ -1041,7 +1075,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const parsedSubs = typeof data.submissions === 'string' ? JSON.parse(data.submissions) : data.submissions;
         if (Array.isArray(parsedSubs)) {
           setSubmissions(parsedSubs);
-          localStorage.setItem('omr_submissions', JSON.stringify(parsedSubs));
         }
       }
 
@@ -1049,7 +1082,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const parsedStudents = typeof data.students === 'string' ? JSON.parse(data.students) : data.students;
         if (Array.isArray(parsedStudents)) {
           setStudents(parsedStudents);
-          localStorage.setItem('omr_students', JSON.stringify(parsedStudents));
+          safeLocalStorageSet('omr_students', JSON.stringify(parsedStudents));
         }
       }
 
@@ -1057,7 +1090,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const parsedClasses = typeof data.classes === 'string' ? JSON.parse(data.classes) : data.classes;
         if (Array.isArray(parsedClasses)) {
           setClasses(parsedClasses);
-          localStorage.setItem('omr_classes', JSON.stringify(parsedClasses));
+          safeLocalStorageSet('omr_classes', JSON.stringify(parsedClasses));
         }
       }
 
