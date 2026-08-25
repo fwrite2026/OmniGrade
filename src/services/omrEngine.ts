@@ -760,26 +760,24 @@ export function analyzeBubbleFill(
       let fillScore = 0;
 
       // CASE 1: Empty bubble containing ONLY thin printed font letters (A, B, C, D) or digits (0-9)
-      // Letter strokes occupy <= 12% pixels, leaving at least 2 quadrants empty.
+      // Letter strokes occupy <= 14% pixels, leaving at least 2 quadrants empty.
       if (faintRatio < 0.16 || (faintRatio < 0.22 && minQuadFaint < 0.08 && activeQuads <= 2)) {
-        fillScore = Math.max(0, faintRatio * 0.40); // Low density: 0.00 - 0.08
+        fillScore = Math.max(0, faintRatio * 0.35); // Low density: 0.00 - 0.08
       }
       // CASE 2: Solid Dark Shading (Tô kín và đậm)
-      else if (darkRatio >= 0.35 || (mediumRatio >= 0.50 && minQuadFaint >= 0.45)) {
-        fillScore = Math.min(1.0, 0.80 + darkRatio * 0.20); // High density: 0.85 - 1.00 (>= 60%)
+      else if (darkRatio >= 0.32 || (mediumRatio >= 0.45 && minQuadFaint >= 0.35)) {
+        fillScore = 1.0; // 100% density: Đáp án học sinh chọn
       }
       // CASE 3: Fully Shaded Circle, even if faint/light pencil (Tô kín ô nhưng hơi mờ)
-      // Shading covers across all 4 quadrants (minQuadFaint >= 0.28, faintRatio >= 0.55, core covered)
-      else if (faintRatio >= 0.55 && minQuadFaint >= 0.28 && activeQuads >= 3) {
-        const spatialCov = 0.50 * faintRatio + 0.30 * minQuadFaint + 0.20 * coreFaintRatio;
-        // User specification: tô kín ô nhưng hơi mờ -> xác định mức density cao (>= 60%)
-        fillScore = Math.max(0.62, Math.min(1.0, 0.40 + spatialCov * 0.55 + mediumRatio * 0.20));
+      // Shading covers across all 4 quadrants (minQuadFaint >= 0.25, faintRatio >= 0.50, core covered)
+      else if (faintRatio >= 0.50 && minQuadFaint >= 0.25 && activeQuads >= 3) {
+        fillScore = 1.0; // 100% density: Đáp án học sinh chọn (tô kín ô dù hơi mờ)
       }
       // CASE 4: Partially Shaded Bubble (Tô nhưng không kín ô)
       // Shading does not cover the full circle -> density is proportional to actual coverage
       else {
-        const partialScore = faintRatio * 0.60 + (activeQuads / 4) * 0.25 + coreFaintRatio * 0.15;
-        fillScore = Math.min(0.54, Math.max(0.10, partialScore)); // Proportional density (< 60%)
+        const partialScore = faintRatio * 0.55 + (activeQuads / 4) * 0.20 + coreFaintRatio * 0.15;
+        fillScore = Math.min(0.55, Math.max(0.12, partialScore)); // Proportional density (< 60%)
       }
 
       if (fillScore > bestFillScore) {
