@@ -612,8 +612,8 @@ export function analyzeBubbleFill(
     const imgCropData = ctx.getImageData(cropX, cropY, cropW, cropH);
     cropCtx.putImageData(imgCropData, 0, 0);
 
-    // Extract patch (3.4 * radius) to cover bubble + surrounding paper ring
-    const patchRadius = Math.round(baseRadius * 1.7);
+    // Extract extended patch (3.6 * radius) to cover bubble + surrounding paper ring
+    const patchRadius = Math.round(baseRadius * 1.8);
     const patchSize = patchRadius * 2;
     const patchStartX = Math.max(0, Math.min(ctx.canvas.width - patchSize, Math.round(rawCenterX - patchRadius)));
     const patchStartY = Math.max(0, Math.min(ctx.canvas.height - patchSize, Math.round(rawCenterY - patchRadius)));
@@ -634,8 +634,8 @@ export function analyzeBubbleFill(
     const localCenterX = rawCenterX - patchStartX;
     const localCenterY = rawCenterY - patchStartY;
 
-    // 1. Calculate local paper background from surrounding annulus (1.30r to 1.65r)
-    const bgInnerRadiusSq = (baseRadius * 1.30) * (baseRadius * 1.30);
+    // 1. Calculate local paper background from surrounding annulus (1.25r to 1.65r)
+    const bgInnerRadiusSq = (baseRadius * 1.25) * (baseRadius * 1.25);
     const bgOuterRadiusSq = (baseRadius * 1.65) * (baseRadius * 1.65);
 
     let bgLumSum = 0;
@@ -648,41 +648,34 @@ export function analyzeBubbleFill(
         const distSq = dx * dx + dy * dy;
 
         if (distSq >= bgInnerRadiusSq && distSq <= bgOuterRadiusSq) {
-          const lum = lumGrid[py * patchW + px];
-          // Discard unusually dark pixels outside (e.g. text from neighboring labels)
-          if (lum >= 140) {
-            bgLumSum += lum;
-            bgCount++;
-          }
+          bgLumSum += lumGrid[py * patchW + px];
+          bgCount++;
         }
       }
     }
 
     const localPaperLum = bgCount > 0 ? (bgLumSum / bgCount) : 240;
 
-    // 2. Safe inner disc radius: 0.65 * baseRadius strictly avoids outer printed circular border line
-    const innerRadius = baseRadius * 0.65;
+    // 2. Micro-alignment offset search (tested in a generous grid up to ±6px to lock onto true bubble center)
+    const searchStep = 3;
+    const maxOffset = Math.min(8, Math.max(3, Math.round(baseRadius * 0.45)));
+    const testOffsets: { ox: number; oy: number }[] = [];
+    for (let oy = -maxOffset; oy <= maxOffset; oy += searchStep) {
+      for (let ox = -maxOffset; ox <= maxOffset; ox += searchStep) {
+        testOffsets.push({ ox, oy });
+      }
+    }
+
+    const innerRadius = baseRadius * 0.76;
     const innerRadiusSq = innerRadius * innerRadius;
-    const coreRadius = innerRadius * 0.45;
+    const coreRadius = baseRadius * 0.40;
     const coreRadiusSq = coreRadius * coreRadius;
 
     // Relative thresholds to local paper brightness
-    const faintDelta = Math.max(14, localPaperLum * 0.07);
-    const mediumDelta = Math.max(28, localPaperLum * 0.14);
-    const darkDelta = Math.max(55, localPaperLum * 0.28);
-
-    const faintThreshold = Math.max(10, localPaperLum - faintDelta);
-    const mediumThreshold = Math.max(8, localPaperLum - mediumDelta);
-    const darkThreshold = Math.max(5, localPaperLum - darkDelta);
-
-    // Micro-alignment: test small subpixel offset within +/- 1.5px only (never leaves inner disc)
-    const testOffsets = [
-      { ox: 0, oy: 0 },
-      { ox: -1.5, oy: 0 },
-      { ox: 1.5, oy: 0 },
-      { ox: 0, oy: -1.5 },
-      { ox: 0, oy: 1.5 }
-    ];
+    const darkDelta = Math.max(22, localPaperLum * 0.12);
+    const deepDarkDelta = Math.max(45, localPaperLum * 0.25);
+    const darkThreshold = Math.max(10, localPaperLum - darkDelta);
+    const deepDarkThreshold = Math.max(5, localPaperLum - deepDarkDelta);
 
     let bestFillScore = 0;
     let bestCoreFill = 0;
@@ -693,19 +686,11 @@ export function analyzeBubbleFill(
       const cy = localCenterY + offset.oy;
 
       let innerTotal = 0;
-      let faintCount = 0;
-      let mediumCount = 0;
-      let darkCount = 0;
+      let innerDark = 0;
+      let innerDeepDark = 0;
       let innerLumSum = 0;
-
-      // 4 Quadrants to verify spatial coverage across the whole circle
-      const qTotal = [0, 0, 0, 0];
-      const qFaint = [0, 0, 0, 0];
-      const qMedium = [0, 0, 0, 0];
-
       let coreTotal = 0;
-      let coreFaint = 0;
-      let coreMedium = 0;
+      let coreDark = 0;
 
       for (let py = 0; py < patchH; py++) {
         for (let px = 0; px < patchW; px++) {
@@ -718,26 +703,18 @@ export function analyzeBubbleFill(
             innerTotal++;
             innerLumSum += lum;
 
-            // Determine quadrant (0: TR, 1: TL, 2: BL, 3: BR)
-            const qIdx = dx >= 0 ? (dy < 0 ? 0 : 3) : (dy < 0 ? 1 : 2);
-            qTotal[qIdx]++;
-
-            if (lum < faintThreshold) {
-              faintCount++;
-              qFaint[qIdx]++;
-            }
-            if (lum < mediumThreshold) {
-              mediumCount++;
-              qMedium[qIdx]++;
-            }
             if (lum < darkThreshold) {
-              darkCount++;
+              innerDark++;
+              if (lum < deepDarkThreshold) {
+                innerDeepDark++;
+              }
             }
 
             if (distSq <= coreRadiusSq) {
               coreTotal++;
-              if (lum < faintThreshold) coreFaint++;
-              if (lum < mediumThreshold) coreMedium++;
+              if (lum < darkThreshold) {
+                coreDark++;
+              }
             }
           }
         }
@@ -745,44 +722,29 @@ export function analyzeBubbleFill(
 
       if (innerTotal === 0) continue;
 
-      const faintRatio = faintCount / innerTotal;
-      const mediumRatio = mediumCount / innerTotal;
-      const darkRatio = darkCount / innerTotal;
+      const darkRatio = innerDark / innerTotal;
+      const deepDarkRatio = innerDeepDark / innerTotal;
+      const coreDarkRatio = coreTotal > 0 ? (coreDark / coreTotal) : 0;
       const meanLum = innerLumSum / innerTotal;
       const meanDropFraction = Math.max(0, (localPaperLum - meanLum) / Math.max(1, localPaperLum));
 
-      const qFaintRatios = qTotal.map((t, idx) => t > 0 ? (qFaint[idx] / t) : 0);
-      const minQuadFaint = Math.min(...qFaintRatios);
-      const activeQuads = qFaintRatios.filter(r => r >= 0.25).length;
+      // Font line baseline suppression:
+      // Thin printed font letters (A, B, C, D, 0-9) occupy ~0.05-0.08 of inner pixels with drop ~0.05.
+      // Pencil shading occupies > 0.25 of inner pixels with drop > 0.18.
+      const netDark = Math.max(0, (darkRatio - 0.055) / 0.945);
+      const netDrop = Math.max(0, (meanDropFraction - 0.045) / 0.955);
+      const netCore = Math.max(0, (coreDarkRatio - 0.05) / 0.95);
 
-      const coreFaintRatio = coreTotal > 0 ? (coreFaint / coreTotal) : 0;
+      let fillScore = 0.45 * netDark + 0.30 * netDrop + 0.15 * netCore + 0.10 * deepDarkRatio;
 
-      let fillScore = 0;
-
-      // CASE 1: Empty bubble containing ONLY thin printed font letters (A, B, C, D) or digits (0-9)
-      // Letter strokes occupy <= 14% pixels, leaving at least 2 quadrants empty.
-      if (faintRatio < 0.16 || (faintRatio < 0.22 && minQuadFaint < 0.08 && activeQuads <= 2)) {
-        fillScore = Math.max(0, faintRatio * 0.35); // Low density: 0.00 - 0.08
-      }
-      // CASE 2: Solid Dark Shading (Tô kín và đậm)
-      else if (darkRatio >= 0.32 || (mediumRatio >= 0.45 && minQuadFaint >= 0.35)) {
-        fillScore = 1.0; // 100% density: Đáp án học sinh chọn
-      }
-      // CASE 3: Fully Shaded Circle, even if faint/light pencil (Tô kín ô nhưng hơi mờ)
-      // Shading covers across all 4 quadrants (minQuadFaint >= 0.25, faintRatio >= 0.50, core covered)
-      else if (faintRatio >= 0.50 && minQuadFaint >= 0.25 && activeQuads >= 3) {
-        fillScore = 1.0; // 100% density: Đáp án học sinh chọn (tô kín ô dù hơi mờ)
-      }
-      // CASE 4: Partially Shaded Bubble (Tô nhưng không kín ô)
-      // Shading does not cover the full circle -> density is proportional to actual coverage
-      else {
-        const partialScore = faintRatio * 0.55 + (activeQuads / 4) * 0.20 + coreFaintRatio * 0.15;
-        fillScore = Math.min(0.55, Math.max(0.12, partialScore)); // Proportional density (< 60%)
+      // Graphite density boost for heavy 2B lead
+      if (deepDarkRatio >= 0.25) {
+        fillScore = Math.min(1.0, fillScore + deepDarkRatio * 0.25);
       }
 
       if (fillScore > bestFillScore) {
         bestFillScore = fillScore;
-        bestCoreFill = coreFaintRatio;
+        bestCoreFill = coreDarkRatio;
         bestContrast = meanDropFraction;
       }
     }
@@ -955,32 +917,44 @@ export async function processAnswerSheet(
 
     for (const colIdx of sortedSbdCols) {
       const col = sbdColumns[colIdx];
+      // Calculate baseline noise from lower 8 options
+      const sortedFills = [...col].sort((a, b) => a.fill - b.fill);
+      const lowSlice = sortedFills.slice(0, Math.min(8, sortedFills.length));
+      const baselineFill = lowSlice.reduce((s, b) => s + b.fill, 0) / Math.max(1, lowSlice.length);
+
       col.sort((a, b) => b.fill - a.fill);
       const top = col[0];
       const second = col[1];
 
-      // Digits with fill density >= 60% (0.60) considered selected by user specification
-      const filledDigits = col.filter(item => item.fill >= 0.60);
+      const netFill = top ? top.fill - baselineFill : 0;
+      const secondNetFill = second ? second.fill - baselineFill : 0;
+      const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
 
-      if (filledDigits.length === 1) {
-        // Exactly 1 digit with fill >= 60%
-        detectedStudentId += filledDigits[0].digit.toString();
-        sbdConfAcc += Math.min(99, Math.round(88 + filledDigits[0].fill * 11));
-      } else if (filledDigits.length > 1) {
-        // Multiple digits filled >= 60%
+      // Student ID Column Digit Recognition
+      const isColBlank = !top || (
+        top.fill < 0.14 ||
+        (netFill < 0.07 && top.fill < 0.28) ||
+        (margin < 0.05 && top.fill < 0.28)
+      );
+      const isColMultiple = (
+        !isColBlank && top && second &&
+        top.fill >= 0.25 &&
+        second.fill >= 0.20 &&
+        secondNetFill >= 0.09 &&
+        margin < 0.08
+      );
+
+      if (isColMultiple) {
         sbdHasMultiple = true;
         detectedStudentId += '?';
         sbdConfAcc += 50;
+      } else if (isColBlank) {
+        sbdHasBlank = true;
+        detectedStudentId += '_';
+        sbdConfAcc += 85;
       } else {
-        // No digit reached 60%: Check if top has clear standout or is genuinely blank
-        if (top && top.fill >= 0.48 && (top.fill - (second?.fill || 0)) >= 0.22) {
-          detectedStudentId += top.digit.toString();
-          sbdConfAcc += Math.round(75 + top.fill * 20);
-        } else {
-          sbdHasBlank = true;
-          detectedStudentId += '_';
-          sbdConfAcc += 95;
-        }
+        detectedStudentId += top.digit.toString();
+        sbdConfAcc += Math.min(99, Math.round(85 + top.fill * 14));
       }
     }
 
@@ -1063,32 +1037,43 @@ export async function processAnswerSheet(
 
     for (const colIdx of sortedCodeCols) {
       const col = codeColumns[colIdx];
+      const sortedFills = [...col].sort((a, b) => a.fill - b.fill);
+      const lowSlice = sortedFills.slice(0, Math.min(8, sortedFills.length));
+      const baselineFill = lowSlice.reduce((s, b) => s + b.fill, 0) / Math.max(1, lowSlice.length);
+
       col.sort((a, b) => b.fill - a.fill);
       const top = col[0];
       const second = col[1];
 
-      // Digits with fill density >= 60% (0.60) considered selected by user specification
-      const filledDigits = col.filter(item => item.fill >= 0.60);
+      const netFill = top ? top.fill - baselineFill : 0;
+      const secondNetFill = second ? second.fill - baselineFill : 0;
+      const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
 
-      if (filledDigits.length === 1) {
-        // Exactly 1 digit with fill >= 60%
-        detectedExamCode += filledDigits[0].digit.toString();
-        codeConfAcc += Math.min(99, Math.round(88 + filledDigits[0].fill * 11));
-      } else if (filledDigits.length > 1) {
-        // Multiple digits filled >= 60%
+      // Exam Code Column Digit Recognition
+      const isColBlank = !top || (
+        top.fill < 0.14 ||
+        (netFill < 0.07 && top.fill < 0.28) ||
+        (margin < 0.05 && top.fill < 0.28)
+      );
+      const isColMultiple = (
+        !isColBlank && top && second &&
+        top.fill >= 0.25 &&
+        second.fill >= 0.20 &&
+        secondNetFill >= 0.09 &&
+        margin < 0.08
+      );
+
+      if (isColMultiple) {
         codeHasMultiple = true;
         detectedExamCode += '?';
         codeConfAcc += 50;
+      } else if (isColBlank) {
+        codeHasBlank = true;
+        detectedExamCode += '_';
+        codeConfAcc += 85;
       } else {
-        // No digit reached 60%: Check if top has clear standout or is genuinely blank
-        if (top && top.fill >= 0.48 && (top.fill - (second?.fill || 0)) >= 0.22) {
-          detectedExamCode += top.digit.toString();
-          codeConfAcc += Math.round(75 + top.fill * 20);
-        } else {
-          codeHasBlank = true;
-          detectedExamCode += '_';
-          codeConfAcc += 95;
-        }
+        detectedExamCode += top.digit.toString();
+        codeConfAcc += Math.min(99, Math.round(85 + top.fill * 14));
       }
     }
 
@@ -1257,43 +1242,53 @@ export async function processAnswerSheet(
 
       const topFill = topOpt ? topOpt[1].fillRatio : 0;
       const secondFill = secondOpt ? secondOpt[1].fillRatio : 0;
-
-      // Options with fill density >= 60% (0.60) considered selected by user specification
-      const filledOptions = entries.filter(e => e[1].fillRatio >= 0.60);
+      const topNetFill = topFill - rowBaseline;
+      const secondNetFill = secondOpt ? (secondOpt[1].fillRatio - rowBaseline) : 0;
+      const margin = topFill - secondFill;
 
       let selectedOption: BubbleOption | null = null;
-      let selectedOptions: BubbleOption[] = [];
       let status: RecognizedAnswer['status'] = 'BLANK';
       let confidence = 95;
 
-      if (filledOptions.length > 1) {
-        // RULE 1: MULTIPLE OPTIONS FILLED (>= 60% on 2 or more options)
+      const isQuestionBlank = !topOpt || (
+        topFill < 0.14 ||
+        (topNetFill < 0.07 && topFill < 0.28) ||
+        (margin < 0.05 && topFill < 0.28)
+      );
+      const isQuestionMultiple = (
+        !isQuestionBlank && topOpt && secondOpt &&
+        topFill >= 0.25 &&
+        secondFill >= 0.20 &&
+        secondNetFill >= 0.09 &&
+        margin < 0.08
+      );
+
+      // RULE 1: MULTIPLE OPTIONS FILLED
+      if (isQuestionMultiple) {
         status = 'MULTIPLE';
         selectedOption = null;
-        selectedOptions = filledOptions.map(f => f[0]);
-        confidence = 60;
+        confidence = Math.round(50 + Math.max(0, margin * 80));
         totalMultiple++;
-      } else if (filledOptions.length === 1) {
-        // RULE 2: SINGLE VALID SELECTION (Exactly 1 option >= 60%)
-        selectedOption = filledOptions[0][0];
-        selectedOptions = [selectedOption];
-        confidence = Math.min(99, Math.round(85 + filledOptions[0][1].fillRatio * 14));
+      }
+      // RULE 2: ALL BLANK (No student pencil mark)
+      else if (isQuestionBlank) {
+        selectedOption = null;
+        status = 'BLANK';
+        confidence = 98;
+        totalBlank++;
+      }
+      // RULE 3: SINGLE CONFIDENT / VALID FILL
+      else if (topOpt) {
+        selectedOption = topOpt[0];
+        confidence = Math.min(99, Math.round(85 + topFill * 14));
         status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
-      } else {
-        // RULE 3: No option >= 60% -> Check for borderline single mark vs pure BLANK
-        if (topOpt && topFill >= 0.48 && (topFill - secondFill) >= 0.22) {
-          selectedOption = topOpt[0];
-          selectedOptions = [selectedOption];
-          confidence = Math.round(75 + topFill * 20);
-          status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
-        } else {
-          // Genuinely BLANK
-          selectedOption = null;
-          selectedOptions = [];
-          status = 'BLANK';
-          confidence = 98;
-          totalBlank++;
-        }
+      }
+      // RULE 4: FALLBACK BLANK
+      else {
+        selectedOption = null;
+        status = 'BLANK';
+        confidence = 96;
+        totalBlank++;
       }
 
       // If status is MULTIPLE or BLANK, it can NEVER be correct or awarded points!
