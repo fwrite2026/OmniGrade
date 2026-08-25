@@ -654,11 +654,11 @@ export function analyzeBubbleFill(
     const bgVariance = bgCount > 0 ? Math.max(0, (bgLumSqSum / bgCount) - (localPaperLum * localPaperLum)) : 9;
     const paperStdDev = Math.sqrt(bgVariance);
 
-    // Adaptive thresholds
-    // A pixel is clean untouched paper if lum >= localPaperLum - 16
-    const whiteThreshold = Math.max(170, localPaperLum - Math.max(14, paperStdDev * 2.2));
-    // A pixel is dark (pencil lead or printed font stroke) if lum < darkCutoff
-    const darkCutoff = Math.min(185, Math.max(65, localPaperLum - 36));
+    // Adaptive thresholds strictly relative to local paper background
+    const paperTolerance = Math.max(10, paperStdDev * 1.8);
+    const whiteThreshold = Math.max(30, localPaperLum - paperTolerance);
+    const darkCutoff = Math.max(20, localPaperLum - Math.max(26, paperStdDev * 2.4));
+    const deepDarkCutoff = Math.max(10, localPaperLum - Math.max(45, paperStdDev * 3.5));
 
     // Precalculate binary dark mask for the patch to enable fast 3x3 solidness erosion check
     const darkMask = new Uint8Array(patchW * patchH);
@@ -681,9 +681,9 @@ export function analyzeBubbleFill(
       { ox: 0, oy: 2 }
     ];
 
-    const bodyRadius = baseRadius * 0.78; // Strict inner body excluding printed outer border
+    const bodyRadius = baseRadius * 0.72; // Strict inner body excluding printed outer border
     const bodyRadiusSq = bodyRadius * bodyRadius;
-    const coreRadius = baseRadius * 0.42; // Center core
+    const coreRadius = baseRadius * 0.40; // Center core
     const coreRadiusSq = coreRadius * coreRadius;
 
     for (const offset of testOffsets) {
@@ -692,6 +692,7 @@ export function analyzeBubbleFill(
 
       let bodyTotal = 0;
       let bodyDark = 0;
+      let bodyDeepDark = 0;
       let bodySolidDark = 0;
       let bodyWhite = 0;
       let coreTotal = 0;
@@ -717,6 +718,7 @@ export function analyzeBubbleFill(
 
             if (darkMask[pIdx] === 1) {
               bodyDark++;
+              if (lum < deepDarkCutoff) bodyDeepDark++;
 
               // 3x3 Morphological solidness: count how many 8-neighbors are also dark
               // Printed 1-2px font lines will have <= 3 dark neighbors
@@ -748,9 +750,11 @@ export function analyzeBubbleFill(
       if (bodyTotal === 0) continue;
 
       const darkRatio = bodyDark / bodyTotal;
+      const deepDarkRatio = bodyDeepDark / bodyTotal;
       const solidDarkRatio = bodySolidDark / bodyTotal;
       const whiteRatio = bodyWhite / bodyTotal;
       const coreSolidRatio = coreTotal > 0 ? (coreSolidDark / coreTotal) : 0;
+      const coreDarkRatio = coreTotal > 0 ? (coreDark / coreTotal) : 0;
 
       const meanLum = innerLumSum / bodyTotal;
       const intensityDrop = Math.max(0, (localPaperLum - meanLum) / Math.max(1, localPaperLum));
@@ -758,33 +762,39 @@ export function analyzeBubbleFill(
       // =========================================================================
       // CRITICAL: PRINTED LETTER (A, B, C, D) DISCARDING FILTER
       // =========================================================================
-      // An empty bubble with a printed letter (A, B, C, D) has:
-      // 1. Over 60% of pixels are untouched clean paper (whiteRatio >= 0.60)
-      // 2. Very few solid dark pixels (solidDarkRatio < 0.07) because font strokes are thin (1-2px)
-      // 3. Low overall luminance drop (intensityDrop < 0.18)
-      // 4. Low core solidness (coreSolidRatio < 0.08)
+      // In an unshaded bubble with a printed letter (A, B, C, D):
+      // - Over 55% of the interior is clean paper (whiteRatio >= 0.55)
+      // - Font strokes are thin (1-2px), yielding almost zero solid dark pixels (solidDarkRatio < 0.06)
+      // - The overall intensity drop is small (intensityDrop < 0.14)
       const isPrintedLetterOrBlank = (
-        whiteRatio >= 0.60 ||
-        (solidDarkRatio < 0.07 && intensityDrop < 0.18) ||
-        (darkRatio < 0.20 && solidDarkRatio < 0.05) ||
-        (coreSolidRatio < 0.08 && whiteRatio >= 0.52)
+        whiteRatio >= 0.55 ||
+        (solidDarkRatio < 0.06 && intensityDrop < 0.16) ||
+        (darkRatio < 0.18 && solidDarkRatio < 0.05) ||
+        (coreSolidRatio < 0.06 && whiteRatio >= 0.48) ||
+        (deepDarkRatio < 0.05 && solidDarkRatio < 0.06 && intensityDrop < 0.15)
       );
 
       let score = 0;
 
       if (isPrintedLetterOrBlank) {
-        // Absolutely zero out or heavily suppress printed letter font lines
+        // Absolutely zero out printed letter font lines
         score = 0.0;
       } else {
-        // Genuine pencil mark: has broad solid coverage and low white background
+        // Genuine student pencil mark: broad solid coverage and dark graphite
         score = (
           0.45 * solidDarkRatio +
-          0.30 * darkRatio +
-          0.25 * intensityDrop
+          0.25 * darkRatio +
+          0.15 * deepDarkRatio +
+          0.15 * intensityDrop
         );
 
-        // Graphite glare recovery: ONLY if pencil physically covers the bubble (white paper < 40%)
-        if (whiteRatio < 0.40 && (solidDarkRatio >= 0.12 || intensityDrop >= 0.16)) {
+        // Pencil core concentration bonus
+        if (coreSolidRatio >= 0.20 || coreDarkRatio >= 0.35) {
+          score = Math.min(1.0, score + 0.10);
+        }
+
+        // Graphite specular glare recovery: ONLY if pencil covers the bubble (white paper < 40%)
+        if (whiteRatio < 0.40 && (solidDarkRatio >= 0.10 || intensityDrop >= 0.15)) {
           score = Math.min(1.0, score + 0.15);
         }
       }
@@ -974,26 +984,30 @@ export async function processAnswerSheet(
       const second = col[1];
 
       const netFill = top ? top.fill - baselineFill : 0;
+      const secondNetFill = second ? second.fill - baselineFill : 0;
       const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
-      const filledCount = col.filter(c => c.fill >= 0.28 && (c.fill - baselineFill) >= 0.12).length;
 
-      if (filledCount > 1 && margin < 0.08) {
+      // Digits with genuine pencil shading
+      const isDualHeavyFill = (
+        top && second &&
+        top.fill >= 0.45 &&
+        second.fill >= 0.40 &&
+        secondNetFill >= 0.22 &&
+        margin < 0.10
+      );
+
+      if (isDualHeavyFill) {
         sbdHasMultiple = true;
         detectedStudentId += top ? top.digit.toString() : '?';
         sbdConfAcc += 45;
-      } else if (top && (top.fill >= fillThreshold || netFill >= 0.14)) {
-        if (margin >= minMargin || netFill >= 0.16) {
-          detectedStudentId += top.digit.toString();
-          sbdConfAcc += Math.min(99, Math.round(80 + top.fill * 20));
+      } else if (top && (top.fill >= 0.18 && netFill >= 0.08)) {
+        detectedStudentId += top.digit.toString();
+        if (margin >= 0.08 || netFill >= 0.14) {
+          sbdConfAcc += Math.min(99, Math.round(82 + top.fill * 18));
         } else {
           sbdHasUncertain = true;
-          detectedStudentId += top.digit.toString();
-          sbdConfAcc += Math.round(55 + margin * 100);
+          sbdConfAcc += Math.round(60 + margin * 100);
         }
-      } else if (top && top.fill >= uncertainThreshold && netFill >= 0.07) {
-        sbdHasUncertain = true;
-        detectedStudentId += top.digit.toString();
-        sbdConfAcc += Math.round(top.fill * 140);
       } else {
         sbdHasBlank = true;
         detectedStudentId += '_';
@@ -1089,26 +1103,30 @@ export async function processAnswerSheet(
       const second = col[1];
 
       const netFill = top ? top.fill - baselineFill : 0;
+      const secondNetFill = second ? second.fill - baselineFill : 0;
       const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
-      const filledCount = col.filter(c => c.fill >= 0.28 && (c.fill - baselineFill) >= 0.12).length;
 
-      if (filledCount > 1 && margin < 0.08) {
+      // Digits with genuine pencil shading
+      const isDualHeavyFill = (
+        top && second &&
+        top.fill >= 0.45 &&
+        second.fill >= 0.40 &&
+        secondNetFill >= 0.22 &&
+        margin < 0.10
+      );
+
+      if (isDualHeavyFill) {
         codeHasMultiple = true;
         detectedExamCode += top ? top.digit.toString() : '?';
         codeConfAcc += 45;
-      } else if (top && (top.fill >= fillThreshold || netFill >= 0.14)) {
-        if (margin >= minMargin || netFill >= 0.16) {
-          detectedExamCode += top.digit.toString();
-          codeConfAcc += Math.min(99, Math.round(80 + top.fill * 20));
+      } else if (top && (top.fill >= 0.18 && netFill >= 0.08)) {
+        detectedExamCode += top.digit.toString();
+        if (margin >= 0.08 || netFill >= 0.14) {
+          codeConfAcc += Math.min(99, Math.round(82 + top.fill * 18));
         } else {
           codeHasUncertain = true;
-          detectedExamCode += top.digit.toString();
-          codeConfAcc += Math.round(55 + margin * 100);
+          codeConfAcc += Math.round(60 + margin * 100);
         }
-      } else if (top && top.fill >= uncertainThreshold && netFill >= 0.07) {
-        codeHasUncertain = true;
-        detectedExamCode += top.digit.toString();
-        codeConfAcc += Math.round(top.fill * 140);
       } else {
         codeHasBlank = true;
         detectedExamCode += '_';
@@ -1282,57 +1300,55 @@ export async function processAnswerSheet(
       const topFill = topOpt ? topOpt[1].fillRatio : 0;
       const secondFill = secondOpt ? secondOpt[1].fillRatio : 0;
       const topNetFill = topFill - rowBaseline;
+      const secondNetFill = secondOpt ? (secondOpt[1].fillRatio - rowBaseline) : 0;
       const margin = topFill - secondFill;
 
       // Candidate genuinely shaded options: must have actual pencil shading (not printed letter font lines)!
       const genuineFilledOptions = entries.filter(e => 
-        e[1].fillRatio >= 0.28 && 
-        (e[1].fillRatio - rowBaseline) >= 0.12
+        e[1].fillRatio >= 0.20 && 
+        (e[1].fillRatio - rowBaseline) >= 0.08
       );
 
       let selectedOption: BubbleOption | null = null;
       let status: RecognizedAnswer['status'] = 'BLANK';
       let confidence = 95;
 
-      // RULE 1: MULTIPLE OPTIONS FILLED (Học sinh thực sự dùng bút chì tô >= 2 đáp án)
-      // Only triggered when 2 or more options have genuine pencil fill marks!
-      // (Exception: only if top is extremely dominant >= 0.70, second is a light erased smudge <= 0.22, margin >= 0.45)
-      const isErasedSmudge = (topFill >= 0.70 && secondFill <= 0.22 && margin >= 0.45);
+      // Dual heavy fill check: MULTIPLE is strictly reserved for unmistakable intentional multi-bubble shading
+      const isDualHeavyFill = (
+        topOpt && secondOpt &&
+        topFill >= 0.45 &&
+        secondFill >= 0.40 &&
+        secondNetFill >= 0.22 &&
+        margin < 0.10
+      );
 
-      if (genuineFilledOptions.length >= 2 && !isErasedSmudge) {
+      // RULE 1: MULTIPLE OPTIONS FILLED (Học sinh thực sự dùng bút chì tô >= 2 đáp án đen đậm)
+      if (isDualHeavyFill) {
         status = 'MULTIPLE';
         selectedOption = null;
         confidence = Math.round(50 + Math.max(0, margin * 80));
         totalMultiple++;
       }
       // RULE 2: ALL BLANK (Học sinh bỏ trống câu này - chỉ có chữ in sẵn A, B, C, D trong ô tròn)
-      else if (genuineFilledOptions.length === 0 || topFill < 0.22 || topNetFill < 0.10) {
+      else if (topFill < 0.18 || topNetFill < 0.08) {
         selectedOption = null;
         status = 'BLANK';
         confidence = 98;
         totalBlank++;
       }
-      // RULE 3: SINGLE CONFIDENT FILL (Học sinh tô 1 đáp án duy nhất)
-      else if (topOpt && (topFill >= fillThreshold || topNetFill >= 0.15)) {
-        if (margin >= minMargin || topNetFill >= 0.18) {
-          selectedOption = topOpt[0];
+      // RULE 3: SINGLE CONFIDENT FILL (Học sinh tô 1 đáp án duy nhất - Ưu tiên chọn đáp án có vết chì tô)
+      else if (topOpt && (topFill >= 0.18 && topNetFill >= 0.08)) {
+        selectedOption = topOpt[0];
+        if (margin >= 0.08 || topNetFill >= 0.14) {
           confidence = Math.min(99, Math.round(82 + topFill * 18));
           status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
         } else {
-          selectedOption = topOpt[0];
           status = 'UNCERTAIN';
           confidence = Math.round(55 + margin * 100);
           totalUncertain++;
         }
       }
-      // RULE 4: FAINT / UNCERTAIN FILL
-      else if (topOpt && topFill >= uncertainThreshold && topNetFill >= 0.08) {
-        selectedOption = topOpt[0];
-        status = 'UNCERTAIN';
-        confidence = Math.round(topFill * 140);
-        totalUncertain++;
-      }
-      // RULE 5: FALLBACK BLANK
+      // RULE 4: FALLBACK BLANK
       else {
         selectedOption = null;
         status = 'BLANK';
