@@ -366,6 +366,16 @@ export interface AuditLog {
   reason?: string;
 }
 
+export interface ImageQualityMetrics {
+  blurScore: number;
+  isSharp: boolean;
+  brightnessScore: number;
+  isWellLit: boolean;
+  anchorsDetectedCount: number;
+  rotationDetectedDeg: number;
+  isPerspectiveCorrected: boolean;
+}
+
 export interface ExamSubmission {
   id: string;
   examId: string;
@@ -375,6 +385,17 @@ export interface ExamSubmission {
   detectedExamCode?: string;          // Mã đề nhận diện được từ ô tô mã đề
   appliedVariantCode?: string;         // Mã đề áp dụng để đối chiếu đáp án chấm điểm
   matchedVariantTitle?: string;        // Tên mô tả mã đề
+  studentIdConfidence?: number;        // 0 - 100
+  examCodeConfidence?: number;         // 0 - 100
+  studentIdCropUrl?: string;           // Ảnh crop khu vực SBD
+  examCodeCropUrl?: string;            // Ảnh crop khu vực Mã đề
+  studentIdStatus?: 'VALID' | 'UNCERTAIN' | 'MULTIPLE' | 'BLANK' | 'NOT_FOUND';
+  examCodeStatus?: 'VALID' | 'UNCERTAIN' | 'MULTIPLE' | 'BLANK' | 'MISMATCH';
+  originalStudentId?: string;
+  originalExamCode?: string;
+  isStudentIdManuallyCorrected?: boolean;
+  isExamCodeManuallyCorrected?: boolean;
+  qualityMetrics?: ImageQualityMetrics;
   scannedImageUrl: string;
   processedImageUrl?: string;
   scanDate: string;

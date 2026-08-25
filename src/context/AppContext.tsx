@@ -77,6 +77,18 @@ interface AppContextType {
     newOption: BubbleOption | null,
     reason: string
   ) => void;
+  updateSubmissionStudent: (
+    submissionId: string,
+    newStudentId: string,
+    newStudentName: string,
+    className?: string,
+    reason?: string
+  ) => void;
+  updateSubmissionExamCode: (
+    submissionId: string,
+    newExamCode: string,
+    reason?: string
+  ) => void;
   regradeSubmissionWithVariant: (submissionId: string, variantCode: string) => void;
   approveSubmission: (submissionId: string) => void;
   deleteSubmission: (id: string) => void;
@@ -820,6 +832,77 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }));
   };
 
+  const updateSubmissionStudent = (
+    submissionId: string,
+    newStudentId: string,
+    newStudentName: string,
+    className?: string,
+    reason?: string
+  ) => {
+    setSubmissions(prev => prev.map(sub => {
+      if (sub.id !== submissionId) return sub;
+
+      const newAuditLog = {
+        id: 'log_' + Math.random().toString(36).slice(2),
+        submissionId: sub.id,
+        action: 'STUDENT_INFO_CORRECTED',
+        previousValue: `SBD: ${sub.studentId || 'Chưa rõ'} (${sub.studentName || 'Chưa rõ'})`,
+        newValue: `SBD: ${newStudentId} (${newStudentName})`,
+        changedBy: role === 'admin' ? 'Administrator' : 'Teacher',
+        timestamp: new Date().toISOString(),
+        reason: reason || 'Giáo viên chỉnh sửa thông tin học sinh'
+      };
+
+      const hasOtherIssues = (sub.totalMultiple || 0) > 0 || (sub.totalUncertain || 0) > 0;
+      const newStatus = hasOtherIssues ? 'NEEDS_REVIEW' : 'GRADED';
+
+      return {
+        ...sub,
+        studentId: newStudentId,
+        studentName: newStudentName,
+        className: className || sub.className,
+        isStudentIdManuallyCorrected: true,
+        studentIdStatus: 'VALID',
+        studentIdConfidence: 100,
+        status: newStatus,
+        needsReviewReason: hasOtherIssues ? sub.needsReviewReason : undefined,
+        auditLogs: [newAuditLog, ...(sub.auditLogs || [])]
+      };
+    }));
+  };
+
+  const updateSubmissionExamCode = (
+    submissionId: string,
+    newExamCode: string,
+    reason?: string
+  ) => {
+    const cleanCode = newExamCode.trim();
+    regradeSubmissionWithVariant(submissionId, cleanCode);
+    setSubmissions(prev => prev.map(sub => {
+      if (sub.id !== submissionId) return sub;
+      const newAuditLog = {
+        id: 'log_' + Math.random().toString(36).slice(2),
+        submissionId: sub.id,
+        action: 'EXAM_CODE_CORRECTED',
+        previousValue: `Mã đề: ${sub.detectedExamCode || sub.appliedVariantCode || 'Chưa rõ'}`,
+        newValue: `Mã đề mới: ${cleanCode}`,
+        changedBy: role === 'admin' ? 'Administrator' : 'Teacher',
+        timestamp: new Date().toISOString(),
+        reason: reason || 'Giáo viên chỉnh sửa Mã đề thi'
+      };
+
+      return {
+        ...sub,
+        detectedExamCode: cleanCode,
+        appliedVariantCode: cleanCode,
+        isExamCodeManuallyCorrected: true,
+        examCodeStatus: 'VALID',
+        examCodeConfidence: 100,
+        auditLogs: [newAuditLog, ...(sub.auditLogs || [])]
+      };
+    }));
+  };
+
   const approveSubmission = (submissionId: string) => {
     setSubmissions(prev => prev.map(sub => {
       if (sub.id !== submissionId) return sub;
@@ -1151,6 +1234,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         addSubmissions,
         updateSubmission,
         overrideAnswer,
+        updateSubmissionStudent,
+        updateSubmissionExamCode,
         regradeSubmissionWithVariant,
         approveSubmission,
         deleteSubmission,

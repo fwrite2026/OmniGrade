@@ -17,14 +17,35 @@ import {
   ArrowRight,
   ZoomIn,
   Tag,
-  RefreshCw
+  RefreshCw,
+  Edit3,
+  Search,
+  CheckSquare,
+  Sparkles,
+  Info
 } from 'lucide-react';
 
 export const ReviewQueue: React.FC = () => {
-  const { t, submissions, activeExam, overrideAnswer, approveSubmission, regradeSubmissionWithVariant, role } = useApp();
+  const {
+    t,
+    submissions,
+    activeExam,
+    overrideAnswer,
+    updateSubmissionStudent,
+    updateSubmissionExamCode,
+    regradeSubmissionWithVariant,
+    approveSubmission,
+    students,
+    role
+  } = useApp();
 
-  const flaggedSubmissions = submissions.filter(s => 
-    s.status === 'NEEDS_REVIEW' || s.status === 'MULTIPLE_ANSWERS' || s.status === 'LOW_CONFIDENCE'
+  const flaggedSubmissions = submissions.filter(s =>
+    s.status === 'NEEDS_REVIEW' ||
+    s.status === 'MULTIPLE_ANSWERS' ||
+    s.status === 'LOW_CONFIDENCE' ||
+    s.status === 'STUDENT_NOT_FOUND' ||
+    (s.totalMultiple && s.totalMultiple > 0) ||
+    (s.totalUncertain && s.totalUncertain > 0)
   );
 
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<string>(
@@ -33,6 +54,15 @@ export const ReviewQueue: React.FC = () => {
 
   const [selectedQNum, setSelectedQNum] = useState<number>(1);
   const [overrideReason, setOverrideReason] = useState<string>('Học sinh tẩy đáp án cũ và tô lại');
+  
+  // Student ID edit modal state
+  const [isEditingStudent, setIsEditingStudent] = useState<boolean>(false);
+  const [editSbdInput, setEditSbdInput] = useState<string>('');
+  const [editNameInput, setEditNameInput] = useState<string>('');
+
+  // Exam Code edit modal state
+  const [isEditingExamCode, setIsEditingExamCode] = useState<boolean>(false);
+  const [editCodeInput, setEditCodeInput] = useState<string>('');
 
   const currentSubmission = submissions.find(s => s.id === selectedSubmissionId) || flaggedSubmissions[0] || submissions[0];
 
@@ -45,7 +75,7 @@ export const ReviewQueue: React.FC = () => {
         </div>
         <h2 className="text-xl font-bold text-white">Không có bài thi nào cần duyệt!</h2>
         <p className="text-xs text-slate-400 max-w-md mx-auto">
-          Tất cả các bài thi đã được động cơ OMR chấm chuẩn xác với độ tin cậy cao và không phát hiện trường hợp nghi vấn.
+          Tất cả các bài thi đã được động cơ OMR nhận diện chuẩn xác với độ tin cậy cao và không phát hiện trường hợp nghi vấn.
         </p>
       </div>
     );
@@ -55,7 +85,7 @@ export const ReviewQueue: React.FC = () => {
   const activeAnswer = recognizedAnswers.find(r => r.questionNumber === selectedQNum) || recognizedAnswers[0];
 
   // Flagged questions in current submission
-  const flaggedQuestionsInSub = recognizedAnswers.filter(r => 
+  const flaggedQuestionsInSub = recognizedAnswers.filter(r =>
     r.status === 'MULTIPLE' || r.status === 'UNCERTAIN' || r.confidence < 75
   );
 
@@ -63,9 +93,23 @@ export const ReviewQueue: React.FC = () => {
     overrideAnswer(currentSubmission.id, selectedQNum, newOption, overrideReason);
   };
 
+  const handleSaveStudentEdit = () => {
+    if (!editSbdInput.trim()) return;
+    const found = students.find(s => s.studentId === editSbdInput.trim());
+    const finalName = editNameInput.trim() || found?.name || `Học sinh SBD ${editSbdInput.trim()}`;
+    const finalClass = found?.className || currentSubmission.className;
+    updateSubmissionStudent(currentSubmission.id, editSbdInput.trim(), finalName, finalClass, 'Giáo viên chỉnh sửa Số báo danh thủ công');
+    setIsEditingStudent(false);
+  };
+
+  const handleSaveExamCodeEdit = () => {
+    if (!editCodeInput.trim()) return;
+    updateSubmissionExamCode(currentSubmission.id, editCodeInput.trim(), 'Giáo viên chỉnh sửa Mã đề thủ công');
+    setIsEditingExamCode(false);
+  };
+
   const handleApproveAll = () => {
     approveSubmission(currentSubmission.id);
-    // Find next flagged
     const nextFlagged = flaggedSubmissions.find(s => s.id !== currentSubmission.id);
     if (nextFlagged) {
       setSelectedSubmissionId(nextFlagged.id);
@@ -95,20 +139,22 @@ export const ReviewQueue: React.FC = () => {
           </p>
         </div>
 
-        <button
-          id="btn-approve-clean-all"
-          onClick={handleApproveAll}
-          className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition cursor-pointer"
-        >
-          <CheckCircle2 className="w-4 h-4" />
-          <span>{t.review.markAllClean}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            id="btn-approve-clean-all"
+            onClick={handleApproveAll}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            <span>Phê duyệt hoàn tất bài này</span>
+          </button>
+        </div>
       </div>
 
       {/* Submissions selector pills */}
       <div className="flex items-center gap-2 overflow-x-auto pb-2">
         {submissions.map((sub) => {
-          const isFlagged = sub.status === 'NEEDS_REVIEW' || sub.status === 'MULTIPLE_ANSWERS';
+          const isFlagged = sub.status === 'NEEDS_REVIEW' || sub.status === 'MULTIPLE_ANSWERS' || sub.status === 'STUDENT_NOT_FOUND' || (sub.totalMultiple && sub.totalMultiple > 0) || (sub.totalUncertain && sub.totalUncertain > 0);
           const isSelected = sub.id === currentSubmission.id;
 
           return (
@@ -130,7 +176,7 @@ export const ReviewQueue: React.FC = () => {
               <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
                 isSelected ? 'bg-white/20 text-white' : 'bg-white/10 text-slate-400'
               }`}>
-                {sub.totalScore}/10
+                {sub.totalScore}/{sub.maxScore}
               </span>
               {isFlagged && <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />}
             </button>
@@ -140,77 +186,219 @@ export const ReviewQueue: React.FC = () => {
 
       {/* 3-Column Review Interface */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column (Question Matrix in Paper) - 4 cols */}
+        {/* Left Column (Question Matrix & Overview) - 4 cols */}
         <div className="lg:col-span-4 bg-[#0E131F]/80 backdrop-blur-xl rounded-3xl border border-white/5 p-5 shadow-2xl space-y-4">
+          {/* Submission Info Box */}
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Bài làm:</span>
-              <h3 className="font-bold text-white text-sm">{currentSubmission.studentName}</h3>
-              <p className="text-xs text-slate-400 font-mono">SBD: <span className="text-cyan-300">{currentSubmission.studentId}</span> • Lớp {currentSubmission.className}</p>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Bài làm thí sinh:</span>
+              <h3 className="font-bold text-white text-sm flex items-center gap-1.5">
+                <span>{currentSubmission.studentName}</span>
+                {currentSubmission.isStudentIdManuallyCorrected && (
+                  <span className="text-[9px] bg-purple-950/60 text-purple-300 border border-purple-500/30 px-1 py-0.2 rounded">
+                    Đã sửa
+                  </span>
+                )}
+              </h3>
+              <p className="text-xs text-slate-400 font-mono">
+                SBD: <span className="text-cyan-300 font-bold">{currentSubmission.studentId}</span> • Lớp {currentSubmission.className}
+              </p>
             </div>
             <div className="text-right">
               <span className="text-xl font-bold text-cyan-400">{currentSubmission.totalScore}</span>
-              <span className="text-xs text-slate-400">/10</span>
+              <span className="text-xs text-slate-400">/{currentSubmission.maxScore}</span>
+              <p className={`text-[10px] font-bold ${currentSubmission.status === 'GRADED' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {currentSubmission.status}
+              </p>
             </div>
           </div>
 
-          {/* Exam Variant Code Recognition & Re-grade Box */}
-          {activeExam && (
-            <div className="p-3 bg-cyan-950/30 rounded-2xl border border-cyan-500/20 text-xs space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-cyan-300 flex items-center gap-1.5">
-                  <Tag className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Mã đề nhận diện:</span>
+          {/* Student ID (SBD) Inspection Card */}
+          <div className="p-3 bg-white/5 rounded-2xl border border-white/10 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <User className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Số Báo Danh (SBD):</span>
+              </span>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${
+                  currentSubmission.studentIdStatus === 'VALID'
+                    ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30'
+                    : 'bg-amber-950/60 text-amber-300 border border-amber-500/30'
+                }`}>
+                  {currentSubmission.studentId} ({currentSubmission.studentIdConfidence ?? 95}%)
                 </span>
-                <span className="font-mono font-bold px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-200 border border-cyan-500/30">
-                  {currentSubmission.detectedExamCode || 'Chưa nhận diện'}
-                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditSbdInput(currentSubmission.studentId || '');
+                    setEditNameInput(currentSubmission.studentName || '');
+                    setIsEditingStudent(!isEditingStudent);
+                  }}
+                  className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 transition cursor-pointer"
+                  title="Sửa thông tin học sinh / SBD"
+                >
+                  <Edit3 className="w-3 h-3" />
+                </button>
               </div>
-
-              <div className="flex items-center justify-between text-[11px] text-slate-300 pt-1">
-                <span>Đáp án đang áp dụng:</span>
-                <span className="font-bold text-white">
-                  {currentSubmission.matchedVariantTitle || `Mã đề ${currentSubmission.appliedVariantCode || activeExam.code}`}
-                </span>
-              </div>
-
-              {activeExam.variants && activeExam.variants.length > 1 && (
-                <div className="pt-2 border-t border-white/10 space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase block">
-                    Đổi mã đề & Chấm lại bài này:
-                  </label>
-                  <div className="flex flex-wrap gap-1">
-                    {activeExam.variants.map((variant) => {
-                      const isCurrentVariant = (currentSubmission.appliedVariantCode || activeExam.defaultVariantCode) === variant.code;
-                      return (
-                        <button
-                          key={variant.id}
-                          type="button"
-                          disabled={isCurrentVariant}
-                          onClick={() => regradeSubmissionWithVariant(currentSubmission.id, variant.code)}
-                          className={`px-2 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer flex items-center gap-1 ${
-                            isCurrentVariant
-                              ? 'bg-cyan-500 text-white shadow-xs cursor-default'
-                              : 'bg-white/5 hover:bg-white/15 text-slate-300 border border-white/10'
-                          }`}
-                        >
-                          <RefreshCw className={`w-2.5 h-2.5 ${isCurrentVariant ? 'hidden' : ''}`} />
-                          <span>Mã {variant.code}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
             </div>
-          )}
+
+            {/* SBD High-Res Physical Crop */}
+            {currentSubmission.studentIdCropUrl && (
+              <div className="rounded-xl overflow-hidden border border-white/10 bg-black/40 p-1">
+                <div className="text-[9px] text-slate-400 px-1 pb-1">Ảnh chụp thực tế vùng SBD:</div>
+                <img
+                  src={currentSubmission.studentIdCropUrl}
+                  alt="Ảnh chụp vùng SBD"
+                  className="w-full h-auto max-h-24 object-contain rounded-lg"
+                />
+              </div>
+            )}
+
+            {/* Quick SBD Edit Inline Form */}
+            {isEditingStudent && (
+              <div className="p-2.5 bg-emerald-950/30 rounded-xl border border-emerald-500/30 space-y-2 text-xs">
+                <div>
+                  <label className="text-[10px] font-bold text-emerald-300 block mb-1">Nhập Số Báo Danh chuẩn:</label>
+                  <input
+                    type="text"
+                    value={editSbdInput}
+                    onChange={(e) => {
+                      setEditSbdInput(e.target.value);
+                      const matched = students.find(s => s.studentId === e.target.value.trim());
+                      if (matched) setEditNameInput(matched.name);
+                    }}
+                    className="w-full text-xs bg-black/50 border border-emerald-500/40 rounded-lg p-1.5 text-white"
+                    placeholder="VD: 102345"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-emerald-300 block mb-1">Tên học sinh tương ứng:</label>
+                  <input
+                    type="text"
+                    value={editNameInput}
+                    onChange={(e) => setEditNameInput(e.target.value)}
+                    className="w-full text-xs bg-black/50 border border-emerald-500/40 rounded-lg p-1.5 text-white"
+                    placeholder="Tên học sinh"
+                  />
+                </div>
+                <div className="flex justify-end gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingStudent(false)}
+                    className="px-2 py-1 rounded-lg bg-white/10 text-slate-300 text-[10px]"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveStudentEdit}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-[10px]"
+                  >
+                    Lưu SBD
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Test Code (Mã Đề) Inspection & Switcher Card */}
+          <div className="p-3 bg-cyan-950/30 rounded-2xl border border-cyan-500/20 text-xs space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-cyan-300 flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Mã Đề Nhận Diện:</span>
+              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="font-mono font-bold px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-200 border border-cyan-500/30">
+                  {currentSubmission.detectedExamCode || currentSubmission.appliedVariantCode || 'Chưa rõ'} ({currentSubmission.examCodeConfidence ?? 95}%)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditCodeInput(currentSubmission.detectedExamCode || currentSubmission.appliedVariantCode || '');
+                    setIsEditingExamCode(!isEditingExamCode);
+                  }}
+                  className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 transition cursor-pointer"
+                  title="Chỉnh sửa mã đề trực tiếp"
+                >
+                  <Edit3 className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+
+            {/* Test Code High-Res Physical Crop */}
+            {currentSubmission.examCodeCropUrl && (
+              <div className="rounded-xl overflow-hidden border border-cyan-500/20 bg-black/40 p-1">
+                <div className="text-[9px] text-slate-400 px-1 pb-1">Ảnh chụp thực tế vùng Mã đề:</div>
+                <img
+                  src={currentSubmission.examCodeCropUrl}
+                  alt="Ảnh chụp vùng Mã đề"
+                  className="w-full h-auto max-h-24 object-contain rounded-lg"
+                />
+              </div>
+            )}
+
+            {/* Inline Manual Code Edit */}
+            {isEditingExamCode && (
+              <div className="p-2.5 bg-cyan-950/50 rounded-xl border border-cyan-500/40 space-y-2 text-xs">
+                <label className="text-[10px] font-bold text-cyan-300 block">Nhập mã đề chính xác:</label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={editCodeInput}
+                    onChange={(e) => setEditCodeInput(e.target.value)}
+                    className="flex-1 text-xs bg-black/50 border border-cyan-500/40 rounded-lg p-1.5 text-white font-mono"
+                    placeholder="VD: 101, 102..."
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveExamCodeEdit}
+                    className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-white font-bold text-xs rounded-lg"
+                  >
+                    Áp dụng
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Switch Variant Buttons if exam has variants */}
+            {activeExam?.variants && activeExam.variants.length > 1 && (
+              <div className="pt-1.5 border-t border-white/10 space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase block">
+                  Đổi mã đề & Chấm lại bài này:
+                </label>
+                <div className="flex flex-wrap gap-1">
+                  {activeExam.variants.map((variant) => {
+                    const isCurrentVariant = (currentSubmission.appliedVariantCode || activeExam.defaultVariantCode) === variant.code;
+                    return (
+                      <button
+                        key={variant.id}
+                        type="button"
+                        disabled={isCurrentVariant}
+                        onClick={() => regradeSubmissionWithVariant(currentSubmission.id, variant.code)}
+                        className={`px-2 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer flex items-center gap-1 ${
+                          isCurrentVariant
+                            ? 'bg-cyan-500 text-white shadow-xs cursor-default'
+                            : 'bg-white/5 hover:bg-white/15 text-slate-300 border border-white/10'
+                        }`}
+                      >
+                        <RefreshCw className={`w-2.5 h-2.5 ${isCurrentVariant ? 'hidden' : ''}`} />
+                        <span>Mã {variant.code}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Flagged issues alert */}
           {flaggedQuestionsInSub.length > 0 && (
             <div className="p-3 bg-amber-950/40 rounded-2xl border border-amber-500/30 text-xs text-amber-300 space-y-1">
               <span className="font-bold flex items-center gap-1">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                Câu nghi vấn ({flaggedQuestionsInSub.length} câu):
+                Câu nghi vấn cần duyệt ({flaggedQuestionsInSub.length} câu):
               </span>
               <div className="flex gap-1.5 flex-wrap pt-1">
                 {flaggedQuestionsInSub.map(fq => (
@@ -227,7 +415,7 @@ export const ReviewQueue: React.FC = () => {
           )}
 
           {/* Full question grid list */}
-          <div className="space-y-1 max-h-[440px] overflow-y-auto pr-1">
+          <div className="space-y-1 max-h-[380px] overflow-y-auto pr-1">
             {recognizedAnswers.map((ans) => {
               const isSelected = ans.questionNumber === selectedQNum;
               const isFlagged = ans.status === 'MULTIPLE' || ans.status === 'UNCERTAIN';
@@ -290,8 +478,17 @@ export const ReviewQueue: React.FC = () => {
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <div>
                 <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">Đang kiểm tra:</span>
-                <h3 className="font-bold text-white text-lg">
-                  Câu hỏi số {selectedQNum} / {activeExam?.numQuestions || 40}
+                <h3 className="font-bold text-white text-lg flex items-center gap-2">
+                  <span>Câu hỏi số {selectedQNum} / {activeExam?.numQuestions || 40}</span>
+                  <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold ${
+                    activeAnswer?.status === 'CORRECT'
+                      ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
+                      : activeAnswer?.status === 'WRONG'
+                      ? 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
+                      : 'bg-amber-950/60 text-amber-400 border border-amber-500/30'
+                  }`}>
+                    {activeAnswer?.status} (Độ tin cậy {activeAnswer?.confidence ?? 95}%)
+                  </span>
                 </h3>
               </div>
 
@@ -313,6 +510,28 @@ export const ReviewQueue: React.FC = () => {
               </div>
             </div>
 
+            {/* High-Resolution Cropped Question Area */}
+            {activeAnswer?.cropImageUrl && (
+              <div className="p-3 bg-black/60 rounded-2xl border border-white/10 space-y-2">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span className="font-bold flex items-center gap-1.5 text-slate-200">
+                    <ZoomIn className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Ảnh chụp thực tế vết bút chì / mực (Câu {selectedQNum}):</span>
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    Nhận diện OMR ban đầu: <b className="text-white">{activeAnswer.originalOmrAnswer || 'Trống'}</b>
+                  </span>
+                </div>
+                <div className="p-2 bg-white/5 rounded-xl flex items-center justify-center min-h-[50px]">
+                  <img
+                    src={activeAnswer.cropImageUrl}
+                    alt={`Ảnh cắt câu ${selectedQNum}`}
+                    className="max-h-28 w-auto object-contain rounded-lg shadow-md"
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Bubble Fill Ratio Meter Visualizer */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {/* Left: OMR Machine Interpretation */}
@@ -324,8 +543,8 @@ export const ReviewQueue: React.FC = () => {
                 <div className="space-y-2.5">
                   {['A', 'B', 'C', 'D'].map((opt) => {
                     const ratio = activeAnswer?.fillRatios?.[opt] || 0.02;
-                    const isFilled = ratio >= 0.35;
-                    const isUncertain = ratio >= 0.18 && ratio < 0.35;
+                    const isFilled = ratio >= 0.32;
+                    const isUncertain = ratio >= 0.16 && ratio < 0.32;
 
                     return (
                       <div key={opt} className="space-y-1">
