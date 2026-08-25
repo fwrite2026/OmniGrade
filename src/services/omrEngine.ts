@@ -316,7 +316,7 @@ function findCornerAnchors(
   srcQuad: [Point2D, Point2D, Point2D, Point2D];
   dstQuad: [Point2D, Point2D, Point2D, Point2D];
 } {
-  // 1. Determine canonical Destination Anchor Coordinates from template (Default: 60px, 58.76px / 1540px, 2205.76px)
+  // 1. Determine canonical Destination Anchor Coordinates from template
   const defaultDstTL = { x: width * 0.0375, y: height * 0.026 };
   const defaultDstTR = { x: width * 0.9625, y: height * 0.026 };
   const defaultDstBL = { x: width * 0.0375, y: height * 0.976 };
@@ -335,9 +335,9 @@ function findCornerAnchors(
   ];
 
   try {
-    // 2. Wide Quadrant Search for Black Solid Anchor Blocks
-    const marginX = Math.round(width * 0.38);
-    const marginY = Math.round(height * 0.35);
+    // 2. Search strictly within the outer corner margins (top/bottom 12%, left/right 14%)
+    const marginX = Math.round(width * 0.14);
+    const marginY = Math.round(height * 0.12);
 
     const quadrants = [
       { key: 'tl' as const, xMin: 0, xMax: marginX, yMin: 0, yMax: marginY, def: dstQuad[0], prefX: 0, prefY: 0 },
@@ -349,8 +349,8 @@ function findCornerAnchors(
     const detectedPoints: (Point2D | null)[] = [null, null, null, null];
     let foundCount = 0;
 
-    const markerW = Math.max(18, Math.round(width * 0.032));
-    const markerH = Math.max(14, Math.round(height * 0.020));
+    const markerW = Math.max(16, Math.round(width * 0.026));
+    const markerH = Math.max(12, Math.round(height * 0.016));
 
     quadrants.forEach((q, qIdx) => {
       const searchW = q.xMax - q.xMin;
@@ -364,33 +364,28 @@ function findCornerAnchors(
       let bestX = q.def.x;
       let bestY = q.def.y;
 
-      const step = 4;
+      const step = 3;
       for (let y = 4; y < searchH - markerH - 4; y += step) {
         for (let x = 4; x < searchW - markerW - 4; x += step) {
           let darkCount = 0;
-          let lumSum = 0;
           let sampleTotal = 0;
 
-          for (let dy = 0; dy < markerH; dy += 3) {
-            for (let dx = 0; dx < markerW; dx += 3) {
+          for (let dy = 0; dy < markerH; dy += 2) {
+            for (let dx = 0; dx < markerW; dx += 2) {
               const idx = ((y + dy) * searchW + (x + dx)) * 4;
               const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
               sampleTotal++;
-              lumSum += lum;
-              if (lum < 90) darkCount++;
+              if (lum < 85) darkCount++;
             }
           }
 
           const darkRatio = sampleTotal > 0 ? darkCount / sampleTotal : 0;
-          if (darkRatio >= 0.52) {
-            // Check surrounding paper ring contrast
+          if (darkRatio >= 0.55) {
             const absX = q.xMin + x + markerW / 2;
             const absY = q.yMin + y + markerH / 2;
 
-            // Distance to image corner factor (anchors sit close to outer corners)
             const distCorner = Math.hypot(absX - q.prefX, absY - q.prefY);
-            const cornerProximity = Math.max(0.2, 1.0 - (distCorner / (width * 0.5)));
-
+            const cornerProximity = Math.max(0.2, 1.0 - (distCorner / (width * 0.3)));
             const score = darkRatio * 1.5 + cornerProximity * 0.8;
 
             if (score > bestScore) {
@@ -402,37 +397,33 @@ function findCornerAnchors(
         }
       }
 
-      if (bestScore > 0.85) {
+      if (bestScore > 1.1) {
         detectedPoints[qIdx] = { x: Math.round(bestX), y: Math.round(bestY) };
         foundCount++;
       }
     });
 
-    // 3. Geometric Completion for Missing Anchors if at least 3 were found
+    // 3. Geometric Completion for Missing Anchors if exactly 3 were found
     if (foundCount === 3) {
       if (!detectedPoints[0] && detectedPoints[1] && detectedPoints[2] && detectedPoints[3]) {
-        // TL = TR + BL - BR
         detectedPoints[0] = {
           x: detectedPoints[1].x + detectedPoints[3].x - detectedPoints[2].x,
           y: detectedPoints[1].y + detectedPoints[3].y - detectedPoints[2].y
         };
         foundCount = 4;
       } else if (!detectedPoints[1] && detectedPoints[0] && detectedPoints[2] && detectedPoints[3]) {
-        // TR = TL + BR - BL
         detectedPoints[1] = {
           x: detectedPoints[0].x + detectedPoints[2].x - detectedPoints[3].x,
           y: detectedPoints[0].y + detectedPoints[2].y - detectedPoints[3].y
         };
         foundCount = 4;
       } else if (!detectedPoints[2] && detectedPoints[0] && detectedPoints[1] && detectedPoints[3]) {
-        // BR = TR + BL - TL
         detectedPoints[2] = {
           x: detectedPoints[1].x + detectedPoints[3].x - detectedPoints[0].x,
           y: detectedPoints[1].y + detectedPoints[3].y - detectedPoints[0].y
         };
         foundCount = 4;
       } else if (!detectedPoints[3] && detectedPoints[0] && detectedPoints[1] && detectedPoints[2]) {
-        // BL = TL + BR - TR
         detectedPoints[3] = {
           x: detectedPoints[0].x + detectedPoints[2].x - detectedPoints[1].x,
           y: detectedPoints[0].y + detectedPoints[2].y - detectedPoints[1].y
@@ -448,10 +439,26 @@ function findCornerAnchors(
       detectedPoints[3] || dstQuad[3]
     ];
 
+    // Validate geometry: check if aspect ratio is roughly consistent
+    if (foundCount === 4) {
+      const topW = Math.hypot(srcQuad[1].x - srcQuad[0].x, srcQuad[1].y - srcQuad[0].y);
+      const botW = Math.hypot(srcQuad[2].x - srcQuad[3].x, srcQuad[2].y - srcQuad[3].y);
+      const leftH = Math.hypot(srcQuad[3].x - srcQuad[0].x, srcQuad[3].y - srcQuad[0].y);
+      const rightH = Math.hypot(srcQuad[2].x - srcQuad[1].x, srcQuad[2].y - srcQuad[1].y);
+
+      const wRatio = Math.abs(topW - botW) / Math.max(topW, botW);
+      const hRatio = Math.abs(leftH - rightH) / Math.max(leftH, rightH);
+
+      // If distortion is too extreme (> 22%), anchors are likely false positives
+      if (wRatio > 0.22 || hRatio > 0.22) {
+        return { foundCount: 0, srcQuad: dstQuad, dstQuad };
+      }
+    }
+
     return { foundCount, srcQuad, dstQuad };
   } catch {
     return {
-      foundCount: 4,
+      foundCount: 0,
       srcQuad: dstQuad,
       dstQuad
     };
@@ -605,8 +612,8 @@ export function analyzeBubbleFill(
     const imgCropData = ctx.getImageData(cropX, cropY, cropW, cropH);
     cropCtx.putImageData(imgCropData, 0, 0);
 
-    // Extract extended patch (3.2 * radius) to cover bubble + surrounding paper ring
-    const patchRadius = Math.round(baseRadius * 1.6);
+    // Extract extended patch (3.6 * radius) to cover bubble + surrounding paper ring
+    const patchRadius = Math.round(baseRadius * 1.8);
     const patchSize = patchRadius * 2;
     const patchStartX = Math.max(0, Math.min(ctx.canvas.width - patchSize, Math.round(rawCenterX - patchRadius)));
     const patchStartY = Math.max(0, Math.min(ctx.canvas.height - patchSize, Math.round(rawCenterY - patchRadius)));
@@ -624,15 +631,14 @@ export function analyzeBubbleFill(
       }
     }
 
-    // 1. Calculate local paper background luminance & standard deviation from outer annulus (1.25r to 1.55r)
     const localCenterX = rawCenterX - patchStartX;
     const localCenterY = rawCenterY - patchStartY;
 
+    // 1. Calculate local paper background from surrounding annulus (1.25r to 1.65r)
     const bgInnerRadiusSq = (baseRadius * 1.25) * (baseRadius * 1.25);
-    const bgOuterRadiusSq = (baseRadius * 1.55) * (baseRadius * 1.55);
+    const bgOuterRadiusSq = (baseRadius * 1.65) * (baseRadius * 1.65);
 
     let bgLumSum = 0;
-    let bgLumSqSum = 0;
     let bgCount = 0;
 
     for (let py = 0; py < patchH; py++) {
@@ -642,154 +648,104 @@ export function analyzeBubbleFill(
         const distSq = dx * dx + dy * dy;
 
         if (distSq >= bgInnerRadiusSq && distSq <= bgOuterRadiusSq) {
-          const lum = lumGrid[py * patchW + px];
-          bgLumSum += lum;
-          bgLumSqSum += lum * lum;
+          bgLumSum += lumGrid[py * patchW + px];
           bgCount++;
         }
       }
     }
 
     const localPaperLum = bgCount > 0 ? (bgLumSum / bgCount) : 240;
-    const bgVariance = bgCount > 0 ? Math.max(0, (bgLumSqSum / bgCount) - (localPaperLum * localPaperLum)) : 9;
-    const paperStdDev = Math.sqrt(bgVariance);
 
-    // Adaptive thresholds strictly relative to local paper background
-    const paperTolerance = Math.max(10, paperStdDev * 1.8);
-    const whiteThreshold = Math.max(30, localPaperLum - paperTolerance);
-    // Dark cutoff: pixels darker than local paper by at least 24
-    const darkCutoff = Math.max(20, localPaperLum - Math.max(24, paperStdDev * 2.2));
-    const deepDarkCutoff = Math.max(10, localPaperLum - Math.max(45, paperStdDev * 3.5));
-
-    // Precalculate binary dark mask for the patch to enable fast 3x3 solidness check
-    const darkMask = new Uint8Array(patchW * patchH);
-    for (let i = 0; i < lumGrid.length; i++) {
-      if (lumGrid[i] < darkCutoff) {
-        darkMask[i] = 1;
+    // 2. Micro-alignment offset search (tested in a generous grid up to ±6px to lock onto true bubble center)
+    const searchStep = 3;
+    const maxOffset = Math.min(8, Math.max(3, Math.round(baseRadius * 0.45)));
+    const testOffsets: { ox: number; oy: number }[] = [];
+    for (let oy = -maxOffset; oy <= maxOffset; oy += searchStep) {
+      for (let ox = -maxOffset; ox <= maxOffset; ox += searchStep) {
+        testOffsets.push({ ox, oy });
       }
     }
 
-    // 2. Micro-Centroid Alignment: test small subpixel offsets (ox, oy)
+    const innerRadius = baseRadius * 0.76;
+    const innerRadiusSq = innerRadius * innerRadius;
+    const coreRadius = baseRadius * 0.40;
+    const coreRadiusSq = coreRadius * coreRadius;
+
+    // Relative thresholds to local paper brightness
+    const darkDelta = Math.max(22, localPaperLum * 0.12);
+    const deepDarkDelta = Math.max(45, localPaperLum * 0.25);
+    const darkThreshold = Math.max(10, localPaperLum - darkDelta);
+    const deepDarkThreshold = Math.max(5, localPaperLum - deepDarkDelta);
+
     let bestFillScore = 0;
     let bestCoreFill = 0;
     let bestContrast = 0;
-
-    const testOffsets = [
-      { ox: 0, oy: 0 },
-      { ox: -2, oy: 0 },
-      { ox: 2, oy: 0 },
-      { ox: 0, oy: -2 },
-      { ox: 0, oy: 2 },
-      { ox: -2, oy: -2 },
-      { ox: 2, oy: 2 }
-    ];
-
-    const bodyRadius = baseRadius * 0.76; // Inner body excluding printed outer border
-    const bodyRadiusSq = bodyRadius * bodyRadius;
-    const coreRadius = baseRadius * 0.42; // Center core
-    const coreRadiusSq = coreRadius * coreRadius;
 
     for (const offset of testOffsets) {
       const cx = localCenterX + offset.ox;
       const cy = localCenterY + offset.oy;
 
-      let bodyTotal = 0;
-      let bodyDark = 0;
-      let bodyDeepDark = 0;
-      let bodySolidDark = 0;
-      let bodyWhite = 0;
+      let innerTotal = 0;
+      let innerDark = 0;
+      let innerDeepDark = 0;
+      let innerLumSum = 0;
       let coreTotal = 0;
       let coreDark = 0;
-      let coreSolidDark = 0;
-      let innerLumSum = 0;
 
-      for (let py = 1; py < patchH - 1; py++) {
-        for (let px = 1; px < patchW - 1; px++) {
+      for (let py = 0; py < patchH; py++) {
+        for (let px = 0; px < patchW; px++) {
           const dx = px - cx;
           const dy = py - cy;
           const distSq = dx * dx + dy * dy;
 
-          if (distSq <= bodyRadiusSq) {
-            const pIdx = py * patchW + px;
-            const lum = lumGrid[pIdx];
+          if (distSq <= innerRadiusSq) {
+            const lum = lumGrid[py * patchW + px];
+            innerTotal++;
             innerLumSum += lum;
-            bodyTotal++;
 
-            if (lum >= whiteThreshold) {
-              bodyWhite++;
+            if (lum < darkThreshold) {
+              innerDark++;
+              if (lum < deepDarkThreshold) {
+                innerDeepDark++;
+              }
             }
 
-            if (darkMask[pIdx] === 1) {
-              bodyDark++;
-              if (lum < deepDarkCutoff) bodyDeepDark++;
-
-              // 3x3 Morphological solidness: count how many 8-neighbors are also dark
-              // Printed 1-2px font lines will have <= 2 dark neighbors
-              // Pencil shading (even light or hatched) has >= 3 dark neighbors
-              const neighborDarkCount = (
-                darkMask[pIdx - patchW - 1] + darkMask[pIdx - patchW] + darkMask[pIdx - patchW + 1] +
-                darkMask[pIdx - 1] + darkMask[pIdx + 1] +
-                darkMask[pIdx + patchW - 1] + darkMask[pIdx + patchW] + darkMask[pIdx + patchW + 1]
-              );
-
-              if (neighborDarkCount >= 3) {
-                bodySolidDark++;
-              }
-
-              if (distSq <= coreRadiusSq) {
-                coreTotal++;
-                coreDark++;
-                if (neighborDarkCount >= 3) {
-                  coreSolidDark++;
-                }
-              }
-            } else if (distSq <= coreRadiusSq) {
+            if (distSq <= coreRadiusSq) {
               coreTotal++;
+              if (lum < darkThreshold) {
+                coreDark++;
+              }
             }
           }
         }
       }
 
-      if (bodyTotal === 0) continue;
+      if (innerTotal === 0) continue;
 
-      const darkRatio = bodyDark / bodyTotal;
-      const deepDarkRatio = bodyDeepDark / bodyTotal;
-      const solidDarkRatio = bodySolidDark / bodyTotal;
-      const coreSolidRatio = coreTotal > 0 ? (coreSolidDark / coreTotal) : 0;
+      const darkRatio = innerDark / innerTotal;
+      const deepDarkRatio = innerDeepDark / innerTotal;
       const coreDarkRatio = coreTotal > 0 ? (coreDark / coreTotal) : 0;
+      const meanLum = innerLumSum / innerTotal;
+      const meanDropFraction = Math.max(0, (localPaperLum - meanLum) / Math.max(1, localPaperLum));
 
-      const meanLum = innerLumSum / bodyTotal;
-      const intensityDrop = Math.max(0, (localPaperLum - meanLum) / Math.max(1, localPaperLum));
+      // Font line baseline suppression:
+      // Thin printed font letters (A, B, C, D, 0-9) occupy ~0.05-0.08 of inner pixels with drop ~0.05.
+      // Pencil shading occupies > 0.25 of inner pixels with drop > 0.18.
+      const netDark = Math.max(0, (darkRatio - 0.055) / 0.945);
+      const netDrop = Math.max(0, (meanDropFraction - 0.045) / 0.955);
+      const netCore = Math.max(0, (coreDarkRatio - 0.05) / 0.95);
 
-      // Continuous, sensitive fill score calculation:
-      // - Printed font letters (A, B, C, D) have ~0.04-0.08 darkRatio, <0.02 solidDarkRatio, ~0.04 intensityDrop
-      //   -> results in score < 0.06
-      // - Light/faint pencil marks have ~0.20-0.35 darkRatio, ~0.08-0.20 solidDarkRatio, ~0.15-0.25 intensityDrop
-      //   -> results in score ~ 0.18-0.35
-      // - Normal/dark pencil marks have ~0.50-0.90 darkRatio, ~0.40-0.85 solidDarkRatio, ~0.35-0.70 intensityDrop
-      //   -> results in score ~ 0.55-0.95
-      const netDark = Math.max(0, darkRatio - 0.035);
-      let score = (
-        0.38 * solidDarkRatio +
-        0.28 * netDark +
-        0.18 * intensityDrop +
-        0.16 * coreDarkRatio
-      );
+      let fillScore = 0.45 * netDark + 0.30 * netDrop + 0.15 * netCore + 0.10 * deepDarkRatio;
 
-      // Deep dark density boost for dark pencil leads
-      if (deepDarkRatio >= 0.15) {
-        score = Math.min(1.0, score + deepDarkRatio * 0.20);
+      // Graphite density boost for heavy 2B lead
+      if (deepDarkRatio >= 0.25) {
+        fillScore = Math.min(1.0, fillScore + deepDarkRatio * 0.25);
       }
 
-      // Specular graphite glare recovery: if center is shiny but body has clear graphite strokes
-      if (solidDarkRatio >= 0.10 && score < 0.60) {
-        score = Math.min(1.0, score + 0.10);
-      }
-
-      if (score > bestFillScore) {
-        bestFillScore = score;
-        bestCoreFill = coreSolidRatio;
-        bestContrast = intensityDrop;
+      if (fillScore > bestFillScore) {
+        bestFillScore = fillScore;
+        bestCoreFill = coreDarkRatio;
+        bestContrast = meanDropFraction;
       }
     }
 
@@ -975,36 +931,26 @@ export async function processAnswerSheet(
       const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
 
       // Student ID Column Digit Recognition
-      // Dual heavy fill check: MULTIPLE is strictly reserved for unmistakable intentional multi-bubble shading
-      const isDualHeavyFill = (
-        top && second &&
-        top.fill >= 0.35 &&
-        second.fill >= 0.30 &&
-        secondNetFill >= 0.18 &&
+      const isColBlank = (top ? (top.fill < 0.10 && netFill < 0.04) : true);
+      const isColMultiple = (
+        !isColBlank && top && second &&
+        top.fill >= 0.25 &&
+        second.fill >= 0.20 &&
+        secondNetFill >= 0.10 &&
         margin < 0.08
       );
 
-      const hasPencilMark = top && (
-        (top.fill >= 0.10 && netFill >= 0.045) ||
-        top.fill >= 0.16
-      );
-
-      if (isDualHeavyFill) {
+      if (isColMultiple) {
         sbdHasMultiple = true;
-        detectedStudentId += top ? top.digit.toString() : '?';
-        sbdConfAcc += 45;
-      } else if (hasPencilMark) {
-        detectedStudentId += top.digit.toString();
-        if (margin >= 0.05 || netFill >= 0.08) {
-          sbdConfAcc += Math.min(99, Math.round(82 + top.fill * 18));
-        } else {
-          sbdHasUncertain = true;
-          sbdConfAcc += Math.round(62 + margin * 100);
-        }
-      } else {
+        detectedStudentId += '?';
+        sbdConfAcc += 50;
+      } else if (isColBlank) {
         sbdHasBlank = true;
         detectedStudentId += '_';
-        sbdConfAcc += 40;
+        sbdConfAcc += 85;
+      } else {
+        detectedStudentId += top.digit.toString();
+        sbdConfAcc += Math.min(99, Math.round(85 + top.fill * 14));
       }
     }
 
@@ -1100,36 +1046,26 @@ export async function processAnswerSheet(
       const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
 
       // Exam Code Column Digit Recognition
-      // Dual heavy fill check: MULTIPLE is strictly reserved for unmistakable intentional multi-bubble shading
-      const isDualHeavyFill = (
-        top && second &&
-        top.fill >= 0.35 &&
-        second.fill >= 0.30 &&
-        secondNetFill >= 0.18 &&
+      const isColBlank = (top ? (top.fill < 0.10 && netFill < 0.04) : true);
+      const isColMultiple = (
+        !isColBlank && top && second &&
+        top.fill >= 0.25 &&
+        second.fill >= 0.20 &&
+        secondNetFill >= 0.10 &&
         margin < 0.08
       );
 
-      const hasPencilMark = top && (
-        (top.fill >= 0.10 && netFill >= 0.045) ||
-        top.fill >= 0.16
-      );
-
-      if (isDualHeavyFill) {
+      if (isColMultiple) {
         codeHasMultiple = true;
-        detectedExamCode += top ? top.digit.toString() : '?';
-        codeConfAcc += 45;
-      } else if (hasPencilMark) {
-        detectedExamCode += top.digit.toString();
-        if (margin >= 0.05 || netFill >= 0.08) {
-          codeConfAcc += Math.min(99, Math.round(82 + top.fill * 18));
-        } else {
-          codeHasUncertain = true;
-          codeConfAcc += Math.round(62 + margin * 100);
-        }
-      } else {
+        detectedExamCode += '?';
+        codeConfAcc += 50;
+      } else if (isColBlank) {
         codeHasBlank = true;
         detectedExamCode += '_';
-        codeConfAcc += 40;
+        codeConfAcc += 85;
+      } else {
+        detectedExamCode += top.digit.toString();
+        codeConfAcc += Math.min(99, Math.round(85 + top.fill * 14));
       }
     }
 
@@ -1302,61 +1238,38 @@ export async function processAnswerSheet(
       const secondNetFill = secondOpt ? (secondOpt[1].fillRatio - rowBaseline) : 0;
       const margin = topFill - secondFill;
 
-      // Candidate genuinely shaded options: must have actual pencil shading (not printed letter font lines)!
-      const genuineFilledOptions = entries.filter(e => 
-        e[1].fillRatio >= 0.12 && 
-        (e[1].fillRatio - rowBaseline) >= 0.05
-      );
-
       let selectedOption: BubbleOption | null = null;
       let status: RecognizedAnswer['status'] = 'BLANK';
       let confidence = 95;
 
-      // Dual heavy fill check: MULTIPLE is strictly reserved for unmistakable intentional multi-bubble shading
-      const isDualHeavyFill = (
-        topOpt && secondOpt &&
-        topFill >= 0.35 &&
-        secondFill >= 0.30 &&
-        secondNetFill >= 0.18 &&
+      const isQuestionBlank = (topOpt ? (topFill < 0.10 && topNetFill < 0.04) : true);
+      const isQuestionMultiple = (
+        !isQuestionBlank && topOpt && secondOpt &&
+        topFill >= 0.25 &&
+        secondFill >= 0.20 &&
+        secondNetFill >= 0.10 &&
         margin < 0.08
       );
 
-      // Pencil Mark Presence: The student shaded this option with pencil (even faint/partial)
-      const hasStudentFill = topOpt && (
-        (topFill >= 0.10 && topNetFill >= 0.045) ||
-        topFill >= 0.16
-      );
-
-      // RULE 1: MULTIPLE OPTIONS FILLED (Học sinh thực sự dùng bút chì tô >= 2 đáp án đen đậm)
-      if (isDualHeavyFill) {
+      // RULE 1: MULTIPLE OPTIONS FILLED
+      if (isQuestionMultiple) {
         status = 'MULTIPLE';
         selectedOption = null;
         confidence = Math.round(50 + Math.max(0, margin * 80));
         totalMultiple++;
       }
-      // RULE 2: ALL BLANK (Học sinh bỏ trống câu này - chỉ có chữ in sẵn A, B, C, D trong ô tròn)
-      else if (!hasStudentFill) {
+      // RULE 2: ALL BLANK (No student pencil mark)
+      else if (isQuestionBlank) {
         selectedOption = null;
         status = 'BLANK';
         confidence = 98;
         totalBlank++;
       }
-      // RULE 3: SINGLE CONFIDENT / VALID FILL (Học sinh tô 1 đáp án - Luôn ưu tiên chọn đáp án có vết chì tô)
+      // RULE 3: SINGLE CONFIDENT / VALID FILL
       else if (topOpt) {
         selectedOption = topOpt[0];
-        if (margin >= 0.05 || topNetFill >= 0.08) {
-          confidence = Math.min(99, Math.round(82 + topFill * 18));
-          status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
-        } else {
-          // Close contest or very faint pencil mark
-          confidence = Math.round(65 + margin * 100);
-          if (margin < 0.025 && topFill < 0.18) {
-            status = 'UNCERTAIN';
-            totalUncertain++;
-          } else {
-            status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
-          }
-        }
+        confidence = Math.min(99, Math.round(85 + topFill * 14));
+        status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
       }
       // RULE 4: FALLBACK BLANK
       else {
@@ -1382,7 +1295,7 @@ export async function processAnswerSheet(
       recognizedAnswers.push({
         questionNumber: qNum,
         selectedOption,
-        selectedOptions: genuineFilledOptions.map(f => f[0]),
+        selectedOptions: selectedOption ? [selectedOption] : [],
         fillRatios: fillMap,
         confidence,
         isCorrect,
