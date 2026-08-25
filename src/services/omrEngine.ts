@@ -291,12 +291,14 @@ export function createStandardizedCanvas(
 }
 
 /**
- * Advanced OMR Bubble Analyzer:
- * - Micro-centroid alignment (±4px auto-center)
- * - Concentric dual-zone sampling:
- *    * Inner Core (0% - 48% radius): solid pencil graphite vs hollow printed letter
- *    * Outer Body (48% - 82% radius): full mark extent
- *    * Local Paper Background Ring (115% - 145% radius): adaptive illumination cancellation
+ * High-Accuracy OMR Bubble Fill Analyzer:
+ * - Samples an extended neighborhood around the bubble center (3.0x radius)
+ * - Measures local paper background from a surrounding annulus (1.15r - 1.45r)
+ * - Computes three complementary signals:
+ *   1. Average Luminance Intensity Drop: relative drop from paper background
+ *   2. Dark Pixel Percentage: ratio of pixels darker than paper threshold
+ *   3. Core Density: central pencil mark concentration vs hollow printed letters
+ * - Auto-aligns centroid with micro-search (±2px) to handle slight registration jitter
  */
 export function analyzeBubbleFill(
   ctx: CanvasRenderingContext2D,
@@ -311,41 +313,47 @@ export function analyzeBubbleFill(
   const cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true })!;
 
   try {
-    const rawX = Math.max(0, Math.min(ctx.canvas.width - w, Math.round(x)));
-    const rawY = Math.max(0, Math.min(ctx.canvas.height - h, Math.round(y)));
-    const rawW = Math.max(4, Math.min(ctx.canvas.width - rawX, Math.round(w)));
-    const rawH = Math.max(4, Math.min(ctx.canvas.height - rawY, Math.round(h)));
+    const rawCenterX = x + w / 2;
+    const rawCenterY = y + h / 2;
+    const baseRadius = Math.min(w, h) / 2;
 
-    const imgData = ctx.getImageData(rawX, rawY, rawW, rawH);
-    cropCtx.putImageData(imgData, 0, 0);
-    const data = imgData.data;
+    // Draw close-up crop for UI inspection
+    const cropX = Math.max(0, Math.min(ctx.canvas.width - w, Math.round(x)));
+    const cropY = Math.max(0, Math.min(ctx.canvas.height - h, Math.round(y)));
+    const cropW = Math.max(4, Math.min(ctx.canvas.width - cropX, Math.round(w)));
+    const cropH = Math.max(4, Math.min(ctx.canvas.height - cropY, Math.round(h)));
+    const imgCropData = ctx.getImageData(cropX, cropY, cropW, cropH);
+    cropCtx.putImageData(imgCropData, 0, 0);
 
-    const centerX = rawW / 2;
-    const centerY = rawH / 2;
-    const radius = Math.min(centerX, centerY);
+    // Extract extended patch (3.0 * radius) to cover bubble + surrounding paper ring
+    const patchRadius = Math.round(baseRadius * 1.5);
+    const patchSize = patchRadius * 2;
+    const patchStartX = Math.max(0, Math.min(ctx.canvas.width - patchSize, Math.round(rawCenterX - patchRadius)));
+    const patchStartY = Math.max(0, Math.min(ctx.canvas.height - patchSize, Math.round(rawCenterY - patchRadius)));
+    const patchW = Math.min(patchSize, ctx.canvas.width - patchStartX);
+    const patchH = Math.min(patchSize, ctx.canvas.height - patchStartY);
 
-    const coreRadius = radius * 0.48;
-    const coreRadiusSq = coreRadius * coreRadius;
-    const bodyRadius = radius * 0.82;
-    const bodyRadiusSq = bodyRadius * bodyRadius;
-    const bgInnerRadius = radius * 1.12;
-    const bgInnerRadiusSq = bgInnerRadius * bgInnerRadius;
-    const bgOuterRadius = radius * 1.48;
-    const bgOuterRadiusSq = bgOuterRadius * bgOuterRadius;
+    const patchData = ctx.getImageData(patchStartX, patchStartY, patchW, patchH).data;
 
-    // 1. Calculate local paper background luminance from the surrounding ring
+    // 1. Calculate local paper background luminance from the annulus (1.15r to 1.45r)
+    const localCenterX = rawCenterX - patchStartX;
+    const localCenterY = rawCenterY - patchStartY;
+
+    const bgInnerRadiusSq = (baseRadius * 1.15) * (baseRadius * 1.15);
+    const bgOuterRadiusSq = (baseRadius * 1.45) * (baseRadius * 1.45);
+
     let bgLumSum = 0;
     let bgCount = 0;
 
-    for (let py = 0; py < rawH; py++) {
-      for (let px = 0; px < rawW; px++) {
-        const dx = px - centerX;
-        const dy = py - centerY;
+    for (let py = 0; py < patchH; py++) {
+      for (let px = 0; px < patchW; px++) {
+        const dx = px - localCenterX;
+        const dy = py - localCenterY;
         const distSq = dx * dx + dy * dy;
 
         if (distSq >= bgInnerRadiusSq && distSq <= bgOuterRadiusSq) {
-          const idx = (py * rawW + px) * 4;
-          const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+          const idx = (py * patchW + px) * 4;
+          const lum = 0.299 * patchData[idx] + 0.587 * patchData[idx + 1] + 0.114 * patchData[idx + 2];
           bgLumSum += lum;
           bgCount++;
         }
@@ -353,54 +361,87 @@ export function analyzeBubbleFill(
     }
 
     const localPaperLum = bgCount > 0 ? (bgLumSum / bgCount) : 240;
-    // Dark threshold relative to local paper luminance
-    const darkCutoff = Math.min(160, Math.max(80, localPaperLum * 0.72));
+    // Dark threshold relative to paper background: anything significantly darker than paper
+    const darkCutoff = Math.min(185, Math.max(70, localPaperLum - 35));
 
-    // 2. Measure Core and Body Fill
-    let coreTotal = 0;
-    let coreDark = 0;
-    let bodyTotal = 0;
-    let bodyDark = 0;
-    let innerLumSum = 0;
+    // 2. Micro-Centroid Peak Alignment: test offsets (dx, dy in [-2, 0, 2]) for peak fill score
+    let bestWeightedScore = -1;
+    let bestDarkRatio = 0;
+    let bestCoreRatio = 0;
+    let bestContrast = 0;
 
-    for (let py = 0; py < rawH; py++) {
-      for (let px = 0; px < rawW; px++) {
-        const dx = px - centerX;
-        const dy = py - centerY;
-        const distSq = dx * dx + dy * dy;
+    const testOffsets = [
+      { ox: 0, oy: 0 },
+      { ox: -2, oy: 0 },
+      { ox: 2, oy: 0 },
+      { ox: 0, oy: -2 },
+      { ox: 0, oy: 2 }
+    ];
 
-        if (distSq <= bodyRadiusSq) {
-          const idx = (py * rawW + px) * 4;
-          const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-          innerLumSum += lum;
-          bodyTotal++;
+    const bodyRadius = baseRadius * 0.85; // Exclude printed outer circular stroke
+    const bodyRadiusSq = bodyRadius * bodyRadius;
+    const coreRadius = baseRadius * 0.45; // Center core where pencil fills
+    const coreRadiusSq = coreRadius * coreRadius;
 
-          if (lum < darkCutoff) {
-            bodyDark++;
-          }
+    for (const offset of testOffsets) {
+      const cx = localCenterX + offset.ox;
+      const cy = localCenterY + offset.oy;
 
-          if (distSq <= coreRadiusSq) {
-            coreTotal++;
+      let bodyTotal = 0;
+      let bodyDark = 0;
+      let coreTotal = 0;
+      let coreDark = 0;
+      let innerLumSum = 0;
+
+      for (let py = 0; py < patchH; py++) {
+        for (let px = 0; px < patchW; px++) {
+          const dx = px - cx;
+          const dy = py - cy;
+          const distSq = dx * dx + dy * dy;
+
+          if (distSq <= bodyRadiusSq) {
+            const idx = (py * patchW + px) * 4;
+            const lum = 0.299 * patchData[idx] + 0.587 * patchData[idx + 1] + 0.114 * patchData[idx + 2];
+            innerLumSum += lum;
+            bodyTotal++;
+
             if (lum < darkCutoff) {
-              coreDark++;
+              bodyDark++;
+            }
+
+            if (distSq <= coreRadiusSq) {
+              coreTotal++;
+              if (lum < darkCutoff) {
+                coreDark++;
+              }
             }
           }
         }
       }
+
+      const darkRatio = bodyTotal > 0 ? (bodyDark / bodyTotal) : 0;
+      const coreRatio = coreTotal > 0 ? (coreDark / coreTotal) : 0;
+      const meanLum = bodyTotal > 0 ? (innerLumSum / bodyTotal) : localPaperLum;
+      const intensityDrop = Math.max(0, (localPaperLum - meanLum) / Math.max(1, localPaperLum));
+
+      // Composite fill score:
+      // - 45% dark pixel ratio
+      // - 40% overall intensity drop
+      // - 15% center core density
+      const compositeScore = 0.45 * darkRatio + 0.40 * intensityDrop + 0.15 * coreRatio;
+
+      if (compositeScore > bestWeightedScore) {
+        bestWeightedScore = compositeScore;
+        bestDarkRatio = darkRatio;
+        bestCoreRatio = coreRatio;
+        bestContrast = intensityDrop;
+      }
     }
 
-    const coreFillRatio = coreTotal > 0 ? coreDark / coreTotal : 0;
-    const bodyFillRatio = bodyTotal > 0 ? bodyDark / bodyTotal : 0;
-    const meanInnerLum = bodyTotal > 0 ? innerLumSum / bodyTotal : 200;
-
-    // Combined fill metric: Core fill is heavily weighted because pencil fills the center
-    const weightedFill = 0.55 * coreFillRatio + 0.45 * bodyFillRatio;
-    const contrastScore = Math.max(0, (localPaperLum - meanInnerLum) / Math.max(1, localPaperLum));
-
     return {
-      fillRatio: Number(Math.min(1.0, Math.max(0.0, weightedFill)).toFixed(4)),
-      coreFillRatio: Number(Math.min(1.0, Math.max(0.0, coreFillRatio)).toFixed(4)),
-      contrastScore: Number(Math.min(1.0, Math.max(0.0, contrastScore)).toFixed(4)),
+      fillRatio: Number(Math.min(1.0, Math.max(0.0, bestWeightedScore)).toFixed(4)),
+      coreFillRatio: Number(Math.min(1.0, Math.max(0.0, bestCoreRatio)).toFixed(4)),
+      contrastScore: Number(Math.min(1.0, Math.max(0.0, bestContrast)).toFixed(4)),
       localBgLum: Math.round(localPaperLum),
       cropDataUrl: cropCanvas.toDataURL('image/jpeg', 0.88)
     };
@@ -502,8 +543,8 @@ export async function processAnswerSheet(
   options: OMRProcessingOptions = {}
 ): Promise<ExamSubmission> {
   const fillThreshold = options.fillThreshold ?? template.fillThreshold ?? 0.20;
-  const uncertainThreshold = options.uncertainThreshold ?? template.uncertainThreshold ?? 0.13;
-  const minMargin = options.minMargin ?? 0.08;
+  const uncertainThreshold = options.uncertainThreshold ?? template.uncertainThreshold ?? 0.14;
+  const minMargin = options.minMargin ?? 0.09;
 
   // 1. Standardize Canvas & Rectify Alignment
   const img = await loadImage(imageUrl);
@@ -562,26 +603,24 @@ export async function processAnswerSheet(
 
     for (const colIdx of sortedSbdCols) {
       const col = sbdColumns[colIdx];
-      // Calculate column baseline from lowest 7 bubbles
+      // Calculate baseline noise from lower 8 options
       const sortedFills = [...col].sort((a, b) => a.fill - b.fill);
-      const baselineFill = sortedFills.slice(0, 7).reduce((s, b) => s + b.fill, 0) / Math.max(1, Math.min(7, sortedFills.length));
+      const lowSlice = sortedFills.slice(0, Math.min(8, sortedFills.length));
+      const baselineFill = lowSlice.reduce((s, b) => s + b.fill, 0) / Math.max(1, lowSlice.length);
 
-      // Sort descending by fill ratio
       col.sort((a, b) => b.fill - a.fill);
       const top = col[0];
       const second = col[1];
 
       const netFill = top ? top.fill - baselineFill : 0;
-      const margin = second ? (top.fill - second.fill) : top?.fill || 0;
-
-      // Check if multiple bubbles are filled
+      const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
       const filledCount = col.filter(c => c.fill >= fillThreshold && (c.fill - baselineFill) >= 0.08).length;
 
-      if (filledCount > 1 && margin < 0.06) {
+      if (filledCount > 1 && margin < 0.07) {
         sbdHasMultiple = true;
         detectedStudentId += top ? top.digit.toString() : '?';
         sbdConfAcc += 45;
-      } else if (top && (top.fill >= fillThreshold || netFill >= 0.09) && top.coreFill >= 0.15) {
+      } else if (top && (top.fill >= fillThreshold || netFill >= 0.10)) {
         if (margin >= minMargin || netFill >= 0.12) {
           detectedStudentId += top.digit.toString();
           sbdConfAcc += Math.min(99, Math.round(80 + top.fill * 20));
@@ -681,21 +720,22 @@ export async function processAnswerSheet(
     for (const colIdx of sortedCodeCols) {
       const col = codeColumns[colIdx];
       const sortedFills = [...col].sort((a, b) => a.fill - b.fill);
-      const baselineFill = sortedFills.slice(0, 7).reduce((s, b) => s + b.fill, 0) / Math.max(1, Math.min(7, sortedFills.length));
+      const lowSlice = sortedFills.slice(0, Math.min(8, sortedFills.length));
+      const baselineFill = lowSlice.reduce((s, b) => s + b.fill, 0) / Math.max(1, lowSlice.length);
 
       col.sort((a, b) => b.fill - a.fill);
       const top = col[0];
       const second = col[1];
 
       const netFill = top ? top.fill - baselineFill : 0;
-      const margin = second ? (top.fill - second.fill) : top?.fill || 0;
+      const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
       const filledCount = col.filter(c => c.fill >= fillThreshold && (c.fill - baselineFill) >= 0.08).length;
 
-      if (filledCount > 1 && margin < 0.06) {
+      if (filledCount > 1 && margin < 0.07) {
         codeHasMultiple = true;
         detectedExamCode += top ? top.digit.toString() : '?';
         codeConfAcc += 45;
-      } else if (top && (top.fill >= fillThreshold || netFill >= 0.09) && top.coreFill >= 0.15) {
+      } else if (top && (top.fill >= fillThreshold || netFill >= 0.10)) {
         if (margin >= minMargin || netFill >= 0.12) {
           detectedExamCode += top.digit.toString();
           codeConfAcc += Math.min(99, Math.round(80 + top.fill * 20));
@@ -866,11 +906,13 @@ export async function processAnswerSheet(
 
       const entries = Object.entries(qData.options) as [BubbleOption, { fillRatio: number; coreFillRatio: number; cropUrl: string }][];
       
-      // Calculate row baseline from lowest options
-      const sortedByFill = [...entries].sort((a, b) => a[1].fillRatio - b[1].fillRatio);
-      const rowBaseline = (sortedByFill[0]?.[1]?.fillRatio || 0 + (sortedByFill[1]?.[1]?.fillRatio || 0)) / 2;
+      // Sort ascending by fill to compute the noise baseline from the unselected options
+      const sortedByFillAsc = [...entries].sort((a, b) => a[1].fillRatio - b[1].fillRatio);
+      // For 4 options, unselected choices are the lowest 3
+      const unselectedOptions = sortedByFillAsc.slice(0, Math.max(1, sortedByFillAsc.length - 1));
+      const rowBaseline = unselectedOptions.reduce((sum, item) => sum + item[1].fillRatio, 0) / Math.max(1, unselectedOptions.length);
 
-      // Sort descending by fill ratio
+      // Sort descending by fill ratio for decision making
       entries.sort((a, b) => b[1].fillRatio - a[1].fillRatio);
 
       for (const [opt, res] of entries) {
@@ -880,26 +922,29 @@ export async function processAnswerSheet(
       const topOpt = entries[0];
       const secondOpt = entries[1];
 
-      const topNetFill = topOpt ? topOpt[1].fillRatio - rowBaseline : 0;
-      const margin = secondOpt ? (topOpt[1].fillRatio - secondOpt[1].fillRatio) : topOpt?.[1]?.fillRatio || 0;
+      const topFill = topOpt ? topOpt[1].fillRatio : 0;
+      const secondFill = secondOpt ? secondOpt[1].fillRatio : 0;
+      const topNetFill = topFill - rowBaseline;
+      const margin = topFill - secondFill;
 
+      // Count options with significant mark above noise baseline
       const filledOptions = entries.filter(e => e[1].fillRatio >= fillThreshold && (e[1].fillRatio - rowBaseline) >= 0.08);
 
       let selectedOption: BubbleOption | null = null;
       let status: RecognizedAnswer['status'] = 'BLANK';
       let confidence = 95;
 
-      if (filledOptions.length > 1 && margin < 0.07) {
+      if (filledOptions.length > 1 && margin < 0.09) {
         // Multiple marks detected -> strictly flag MULTIPLE without guessing
         status = 'MULTIPLE';
         selectedOption = null;
         confidence = Math.round(50 + margin * 100);
         totalMultiple++;
-      } else if (topOpt && (topOpt[1].fillRatio >= fillThreshold || topNetFill >= 0.10) && topOpt[1].coreFillRatio >= 0.14) {
+      } else if (topOpt && (topFill >= fillThreshold || topNetFill >= 0.10)) {
         if (margin >= minMargin || topNetFill >= 0.12) {
           // Confident selection
           selectedOption = topOpt[0];
-          confidence = Math.min(99, Math.round(80 + topOpt[1].fillRatio * 20));
+          confidence = Math.min(99, Math.round(82 + topFill * 18));
           status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
         } else {
           // Low margin between top 2 choices
@@ -908,11 +953,11 @@ export async function processAnswerSheet(
           confidence = Math.round(55 + margin * 100);
           totalUncertain++;
         }
-      } else if (topOpt && topOpt[1].fillRatio >= uncertainThreshold && topNetFill >= 0.05) {
+      } else if (topOpt && topFill >= uncertainThreshold && topNetFill >= 0.05) {
         // Faint mark
         selectedOption = topOpt[0];
         status = 'UNCERTAIN';
-        confidence = Math.round(topOpt[1].fillRatio * 150);
+        confidence = Math.round(topFill * 140);
         totalUncertain++;
       } else {
         // Completely blank
