@@ -615,11 +615,20 @@ export function analyzeBubbleFill(
 
     const patchData = ctx.getImageData(patchStartX, patchStartY, patchW, patchH).data;
 
-    // 1. Calculate local paper background luminance & standard deviation from the outer annulus (1.20r to 1.55r)
+    // Precalculate luminance grid for the patch
+    const lumGrid = new Float32Array(patchW * patchH);
+    for (let py = 0; py < patchH; py++) {
+      for (let px = 0; px < patchW; px++) {
+        const idx = (py * patchW + px) * 4;
+        lumGrid[py * patchW + px] = 0.299 * patchData[idx] + 0.587 * patchData[idx + 1] + 0.114 * patchData[idx + 2];
+      }
+    }
+
+    // 1. Calculate local paper background luminance & standard deviation from outer annulus (1.25r to 1.55r)
     const localCenterX = rawCenterX - patchStartX;
     const localCenterY = rawCenterY - patchStartY;
 
-    const bgInnerRadiusSq = (baseRadius * 1.20) * (baseRadius * 1.20);
+    const bgInnerRadiusSq = (baseRadius * 1.25) * (baseRadius * 1.25);
     const bgOuterRadiusSq = (baseRadius * 1.55) * (baseRadius * 1.55);
 
     let bgLumSum = 0;
@@ -633,8 +642,7 @@ export function analyzeBubbleFill(
         const distSq = dx * dx + dy * dy;
 
         if (distSq >= bgInnerRadiusSq && distSq <= bgOuterRadiusSq) {
-          const idx = (py * patchW + px) * 4;
-          const lum = 0.299 * patchData[idx] + 0.587 * patchData[idx + 1] + 0.114 * patchData[idx + 2];
+          const lum = lumGrid[py * patchW + px];
           bgLumSum += lum;
           bgLumSqSum += lum * lum;
           bgCount++;
@@ -646,32 +654,37 @@ export function analyzeBubbleFill(
     const bgVariance = bgCount > 0 ? Math.max(0, (bgLumSqSum / bgCount) - (localPaperLum * localPaperLum)) : 9;
     const paperStdDev = Math.sqrt(bgVariance);
 
-    // Adaptive dark cutoff: pixels distinctly darker than surrounding paper
-    const darkCutoff = Math.min(185, Math.max(65, localPaperLum - 38));
-    const deepDarkCutoff = Math.min(150, Math.max(50, localPaperLum - 65));
+    // Adaptive thresholds
+    // A pixel is clean untouched paper if lum >= localPaperLum - 16
+    const whiteThreshold = Math.max(170, localPaperLum - Math.max(14, paperStdDev * 2.2));
+    // A pixel is dark (pencil lead or printed font stroke) if lum < darkCutoff
+    const darkCutoff = Math.min(185, Math.max(65, localPaperLum - 36));
 
-    // 2. Micro-Centroid Peak Alignment: test small subpixel offsets for peak mark alignment
-    let bestWeightedScore = -1;
-    let bestDarkRatio = 0;
-    let bestCoreRatio = 0;
+    // Precalculate binary dark mask for the patch to enable fast 3x3 solidness erosion check
+    const darkMask = new Uint8Array(patchW * patchH);
+    for (let i = 0; i < lumGrid.length; i++) {
+      if (lumGrid[i] < darkCutoff) {
+        darkMask[i] = 1;
+      }
+    }
+
+    // 2. Micro-Centroid Alignment: test small subpixel offsets (ox, oy)
+    let bestFillScore = 0;
+    let bestCoreFill = 0;
     let bestContrast = 0;
 
     const testOffsets = [
       { ox: 0, oy: 0 },
-      { ox: -3, oy: 0 },
-      { ox: 3, oy: 0 },
-      { ox: 0, oy: -3 },
-      { ox: 0, oy: 3 },
-      { ox: -2, oy: -2 },
-      { ox: 2, oy: 2 }
+      { ox: -2, oy: 0 },
+      { ox: 2, oy: 0 },
+      { ox: 0, oy: -2 },
+      { ox: 0, oy: 2 }
     ];
 
-    const bodyRadius = baseRadius * 0.82; // Inner body (inside printed outer circular stroke)
+    const bodyRadius = baseRadius * 0.78; // Strict inner body excluding printed outer border
     const bodyRadiusSq = bodyRadius * bodyRadius;
-    const coreRadius = baseRadius * 0.45; // Center core
+    const coreRadius = baseRadius * 0.42; // Center core
     const coreRadiusSq = coreRadius * coreRadius;
-    const outerRingInnerSq = (baseRadius * 0.48) * (baseRadius * 0.48);
-    const outerRingOuterSq = (baseRadius * 0.82) * (baseRadius * 0.82);
 
     for (const offset of testOffsets) {
       const cx = localCenterX + offset.ox;
@@ -679,141 +692,113 @@ export function analyzeBubbleFill(
 
       let bodyTotal = 0;
       let bodyDark = 0;
-      let bodyDeepDark = 0;
+      let bodySolidDark = 0;
+      let bodyWhite = 0;
       let coreTotal = 0;
       let coreDark = 0;
-      let coreDeepDark = 0;
+      let coreSolidDark = 0;
       let innerLumSum = 0;
-      let innerLumSqSum = 0;
 
-      // 4 Quadrants to catch graphite fill even when specular light reflects off part of the bubble
-      let q1Total = 0, q1Dark = 0; // Top-Left
-      let q2Total = 0, q2Dark = 0; // Top-Right
-      let q3Total = 0, q3Dark = 0; // Bottom-Left
-      let q4Total = 0, q4Dark = 0; // Bottom-Right
-      let ringTotal = 0, ringDark = 0;
-
-      for (let py = 0; py < patchH; py++) {
-        for (let px = 0; px < patchW; px++) {
+      for (let py = 1; py < patchH - 1; py++) {
+        for (let px = 1; px < patchW - 1; px++) {
           const dx = px - cx;
           const dy = py - cy;
           const distSq = dx * dx + dy * dy;
 
           if (distSq <= bodyRadiusSq) {
-            const idx = (py * patchW + px) * 4;
-            const r = patchData[idx];
-            const g = patchData[idx + 1];
-            const b = patchData[idx + 2];
-            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-
+            const pIdx = py * patchW + px;
+            const lum = lumGrid[pIdx];
             innerLumSum += lum;
-            innerLumSqSum += lum * lum;
             bodyTotal++;
 
-            const isDark = lum < darkCutoff;
-            const isDeepDark = lum < deepDarkCutoff;
+            if (lum >= whiteThreshold) {
+              bodyWhite++;
+            }
 
-            if (isDark) bodyDark++;
-            if (isDeepDark) bodyDeepDark++;
+            if (darkMask[pIdx] === 1) {
+              bodyDark++;
 
-            // Center core
-            if (distSq <= coreRadiusSq) {
+              // 3x3 Morphological solidness: count how many 8-neighbors are also dark
+              // Printed 1-2px font lines will have <= 3 dark neighbors
+              // Solid pencil shading will have >= 5-8 dark neighbors
+              const neighborDarkCount = (
+                darkMask[pIdx - patchW - 1] + darkMask[pIdx - patchW] + darkMask[pIdx - patchW + 1] +
+                darkMask[pIdx - 1] + darkMask[pIdx + 1] +
+                darkMask[pIdx + patchW - 1] + darkMask[pIdx + patchW] + darkMask[pIdx + patchW + 1]
+              );
+
+              if (neighborDarkCount >= 5) {
+                bodySolidDark++;
+              }
+
+              if (distSq <= coreRadiusSq) {
+                coreTotal++;
+                coreDark++;
+                if (neighborDarkCount >= 5) {
+                  coreSolidDark++;
+                }
+              }
+            } else if (distSq <= coreRadiusSq) {
               coreTotal++;
-              if (isDark) coreDark++;
-              if (isDeepDark) coreDeepDark++;
             }
-
-            // Outer ring inside bubble
-            if (distSq >= outerRingInnerSq && distSq <= outerRingOuterSq) {
-              ringTotal++;
-              if (isDark) ringDark++;
-            }
-
-            // Quadrants
-            if (dx <= 0 && dy <= 0) { q1Total++; if (isDark) q1Dark++; }
-            else if (dx > 0 && dy <= 0) { q2Total++; if (isDark) q2Dark++; }
-            else if (dx <= 0 && dy > 0) { q3Total++; if (isDark) q3Dark++; }
-            else { q4Total++; if (isDark) q4Dark++; }
           }
         }
       }
 
-      const darkRatio = bodyTotal > 0 ? (bodyDark / bodyTotal) : 0;
-      const deepDarkRatio = bodyTotal > 0 ? (bodyDeepDark / bodyTotal) : 0;
-      const coreRatio = coreTotal > 0 ? (coreDark / coreTotal) : 0;
-      const coreDeepRatio = coreTotal > 0 ? (coreDeepDark / coreTotal) : 0;
-      const ringDarkRatio = ringTotal > 0 ? (ringDark / ringTotal) : 0;
+      if (bodyTotal === 0) continue;
 
-      const meanLum = bodyTotal > 0 ? (innerLumSum / bodyTotal) : localPaperLum;
-      const innerVar = bodyTotal > 0 ? Math.max(0, (innerLumSqSum / bodyTotal) - (meanLum * meanLum)) : 0;
-      const innerStdDev = Math.sqrt(innerVar);
+      const darkRatio = bodyDark / bodyTotal;
+      const solidDarkRatio = bodySolidDark / bodyTotal;
+      const whiteRatio = bodyWhite / bodyTotal;
+      const coreSolidRatio = coreTotal > 0 ? (coreSolidDark / coreTotal) : 0;
 
+      const meanLum = innerLumSum / bodyTotal;
       const intensityDrop = Math.max(0, (localPaperLum - meanLum) / Math.max(1, localPaperLum));
 
-      // Quadrant analysis
-      const qRatios = [
-        q1Total > 0 ? q1Dark / q1Total : 0,
-        q2Total > 0 ? q2Dark / q2Total : 0,
-        q3Total > 0 ? q3Dark / q3Total : 0,
-        q4Total > 0 ? q4Dark / q4Total : 0
-      ];
-      const maxQuad = Math.max(...qRatios);
-      const minQuad = Math.min(...qRatios);
-      const avgQuad = (qRatios[0] + qRatios[1] + qRatios[2] + qRatios[3]) / 4;
-
       // =========================================================================
-      // A. PRINTED LETTER FILTER (A, B, C, D rejection in empty bubbles)
+      // CRITICAL: PRINTED LETTER (A, B, C, D) DISCARDING FILTER
       // =========================================================================
-      // In an empty bubble, the printed letter font stroke is thin (1-2px) and only
-      // occupies ~6% - 15% of pixels. Over 85% of the interior pixels are plain white.
-      // If the dark ratio is low (< 0.17), core ratio < 0.20, and intensity drop < 0.10,
-      // this is 100% an UNFILLED bubble with just a printed letter.
-      const isPrintedLetterOnly = (darkRatio < 0.17 && coreRatio < 0.22 && intensityDrop < 0.10 && deepDarkRatio < 0.10);
-
-      // =========================================================================
-      // B. GRAPHITE SPECULAR GLARE DETECTION (Ánh sáng làm bóng lóa vết chì)
-      // =========================================================================
-      // When flashlight / ambient light reflects off shiny graphite pencil lead:
-      // 1. The center might look specular (bright), but local standard deviation (roughness) is high (innerStdDev > 14).
-      // 2. The surrounding ring or at least 2 quadrants still have clear dark graphite strokes (ringDarkRatio > 0.25 or maxQuad > 0.40).
-      // 3. Contrast drop might be dampened by glare, but pencil graphite texture remains.
-      const hasGraphiteGlare = (
-        (innerStdDev > Math.max(14, paperStdDev * 2.2) && (ringDarkRatio >= 0.25 || maxQuad >= 0.40)) ||
-        (maxQuad >= 0.45 && avgQuad >= 0.24 && innerStdDev > 11)
+      // An empty bubble with a printed letter (A, B, C, D) has:
+      // 1. Over 60% of pixels are untouched clean paper (whiteRatio >= 0.60)
+      // 2. Very few solid dark pixels (solidDarkRatio < 0.07) because font strokes are thin (1-2px)
+      // 3. Low overall luminance drop (intensityDrop < 0.18)
+      // 4. Low core solidness (coreSolidRatio < 0.08)
+      const isPrintedLetterOrBlank = (
+        whiteRatio >= 0.60 ||
+        (solidDarkRatio < 0.07 && intensityDrop < 0.18) ||
+        (darkRatio < 0.20 && solidDarkRatio < 0.05) ||
+        (coreSolidRatio < 0.08 && whiteRatio >= 0.52)
       );
 
-      let compositeScore = 0;
+      let score = 0;
 
-      if (isPrintedLetterOnly) {
-        // Suppress false detection of printed letters
-        compositeScore = Math.min(0.06, darkRatio * 0.3);
+      if (isPrintedLetterOrBlank) {
+        // Absolutely zero out or heavily suppress printed letter font lines
+        score = 0.0;
       } else {
-        // Standard multi-factor fill evaluation
-        compositeScore = (
-          0.38 * darkRatio +
-          0.24 * deepDarkRatio +
-          0.20 * intensityDrop +
-          0.18 * (coreRatio * 0.7 + coreDeepRatio * 0.3)
+        // Genuine pencil mark: has broad solid coverage and low white background
+        score = (
+          0.45 * solidDarkRatio +
+          0.30 * darkRatio +
+          0.25 * intensityDrop
         );
 
-        // If graphite glare is detected, recover the true shaded fill
-        if (hasGraphiteGlare && compositeScore < 0.55) {
-          const glareCompensation = Math.min(0.35, Math.max(0.12, (maxQuad * 0.4 + ringDarkRatio * 0.4)));
-          compositeScore = Math.min(0.95, compositeScore + glareCompensation);
+        // Graphite glare recovery: ONLY if pencil physically covers the bubble (white paper < 40%)
+        if (whiteRatio < 0.40 && (solidDarkRatio >= 0.12 || intensityDrop >= 0.16)) {
+          score = Math.min(1.0, score + 0.15);
         }
       }
 
-      if (compositeScore > bestWeightedScore) {
-        bestWeightedScore = compositeScore;
-        bestDarkRatio = darkRatio;
-        bestCoreRatio = coreRatio;
+      if (score > bestFillScore) {
+        bestFillScore = score;
+        bestCoreFill = coreSolidRatio;
         bestContrast = intensityDrop;
       }
     }
 
     return {
-      fillRatio: Number(Math.min(1.0, Math.max(0.0, bestWeightedScore)).toFixed(4)),
-      coreFillRatio: Number(Math.min(1.0, Math.max(0.0, bestCoreRatio)).toFixed(4)),
+      fillRatio: Number(Math.min(1.0, Math.max(0.0, bestFillScore)).toFixed(4)),
+      coreFillRatio: Number(Math.min(1.0, Math.max(0.0, bestCoreFill)).toFixed(4)),
       contrastScore: Number(Math.min(1.0, Math.max(0.0, bestContrast)).toFixed(4)),
       localBgLum: Math.round(localPaperLum),
       cropDataUrl: cropCanvas.toDataURL('image/jpeg', 0.88)
@@ -990,14 +975,14 @@ export async function processAnswerSheet(
 
       const netFill = top ? top.fill - baselineFill : 0;
       const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
-      const filledCount = col.filter(c => c.fill >= fillThreshold && (c.fill - baselineFill) >= 0.08).length;
+      const filledCount = col.filter(c => c.fill >= 0.28 && (c.fill - baselineFill) >= 0.12).length;
 
-      if (filledCount > 1 && margin < 0.07) {
+      if (filledCount > 1 && margin < 0.08) {
         sbdHasMultiple = true;
         detectedStudentId += top ? top.digit.toString() : '?';
         sbdConfAcc += 45;
-      } else if (top && (top.fill >= fillThreshold || netFill >= 0.10)) {
-        if (margin >= minMargin || netFill >= 0.12) {
+      } else if (top && (top.fill >= fillThreshold || netFill >= 0.14)) {
+        if (margin >= minMargin || netFill >= 0.16) {
           detectedStudentId += top.digit.toString();
           sbdConfAcc += Math.min(99, Math.round(80 + top.fill * 20));
         } else {
@@ -1005,7 +990,7 @@ export async function processAnswerSheet(
           detectedStudentId += top.digit.toString();
           sbdConfAcc += Math.round(55 + margin * 100);
         }
-      } else if (top && top.fill >= uncertainThreshold && netFill >= 0.05) {
+      } else if (top && top.fill >= uncertainThreshold && netFill >= 0.07) {
         sbdHasUncertain = true;
         detectedStudentId += top.digit.toString();
         sbdConfAcc += Math.round(top.fill * 140);
@@ -1105,14 +1090,14 @@ export async function processAnswerSheet(
 
       const netFill = top ? top.fill - baselineFill : 0;
       const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
-      const filledCount = col.filter(c => c.fill >= fillThreshold && (c.fill - baselineFill) >= 0.08).length;
+      const filledCount = col.filter(c => c.fill >= 0.28 && (c.fill - baselineFill) >= 0.12).length;
 
-      if (filledCount > 1 && margin < 0.07) {
+      if (filledCount > 1 && margin < 0.08) {
         codeHasMultiple = true;
         detectedExamCode += top ? top.digit.toString() : '?';
         codeConfAcc += 45;
-      } else if (top && (top.fill >= fillThreshold || netFill >= 0.10)) {
-        if (margin >= minMargin || netFill >= 0.12) {
+      } else if (top && (top.fill >= fillThreshold || netFill >= 0.14)) {
+        if (margin >= minMargin || netFill >= 0.16) {
           detectedExamCode += top.digit.toString();
           codeConfAcc += Math.min(99, Math.round(80 + top.fill * 20));
         } else {
@@ -1120,7 +1105,7 @@ export async function processAnswerSheet(
           detectedExamCode += top.digit.toString();
           codeConfAcc += Math.round(55 + margin * 100);
         }
-      } else if (top && top.fill >= uncertainThreshold && netFill >= 0.05) {
+      } else if (top && top.fill >= uncertainThreshold && netFill >= 0.07) {
         codeHasUncertain = true;
         detectedExamCode += top.digit.toString();
         codeConfAcc += Math.round(top.fill * 140);
@@ -1299,35 +1284,37 @@ export async function processAnswerSheet(
       const topNetFill = topFill - rowBaseline;
       const margin = topFill - secondFill;
 
-      // Candidate filled options: options with solid fill exceeding baseline
-      const filledOptions = entries.filter(e => e[1].fillRatio >= 0.22 && (e[1].fillRatio - rowBaseline) >= 0.08);
+      // Candidate genuinely shaded options: must have actual pencil shading (not printed letter font lines)!
+      const genuineFilledOptions = entries.filter(e => 
+        e[1].fillRatio >= 0.28 && 
+        (e[1].fillRatio - rowBaseline) >= 0.12
+      );
 
       let selectedOption: BubbleOption | null = null;
       let status: RecognizedAnswer['status'] = 'BLANK';
       let confidence = 95;
 
-      // RULE 1: MULTIPLE OPTIONS FILLED (e.g. Student shaded all 4 options or 2+ options)
-      // When a student shades 2, 3, or all 4 options, they get 0 points and it's flagged as MULTIPLE!
-      // (Exception: only if top is extremely solid >= 0.72, second is faint <= 0.24, and margin >= 0.40 from an erased smudge)
-      const isErasedSmudge = (topFill >= 0.72 && secondFill <= 0.24 && margin >= 0.40);
+      // RULE 1: MULTIPLE OPTIONS FILLED (Học sinh thực sự dùng bút chì tô >= 2 đáp án)
+      // Only triggered when 2 or more options have genuine pencil fill marks!
+      // (Exception: only if top is extremely dominant >= 0.70, second is a light erased smudge <= 0.22, margin >= 0.45)
+      const isErasedSmudge = (topFill >= 0.70 && secondFill <= 0.22 && margin >= 0.45);
 
-      if (filledOptions.length >= 2 && !isErasedSmudge) {
+      if (genuineFilledOptions.length >= 2 && !isErasedSmudge) {
         status = 'MULTIPLE';
         selectedOption = null;
         confidence = Math.round(50 + Math.max(0, margin * 80));
         totalMultiple++;
       }
-      // RULE 2: ALL BLANK (Student left the row empty or unshaded)
-      // Printed letter A/B/C/D alone has topFill < 0.20 or topNetFill < 0.10.
-      else if (topFill < 0.20 || topNetFill < 0.10 || (topOpt && topOpt[1].coreFillRatio < 0.16 && topFill < 0.25)) {
+      // RULE 2: ALL BLANK (Học sinh bỏ trống câu này - chỉ có chữ in sẵn A, B, C, D trong ô tròn)
+      else if (genuineFilledOptions.length === 0 || topFill < 0.22 || topNetFill < 0.10) {
         selectedOption = null;
         status = 'BLANK';
         confidence = 98;
         totalBlank++;
       }
-      // RULE 3: SINGLE CONFIDENT FILL
-      else if (topOpt && (topFill >= fillThreshold || topNetFill >= 0.14)) {
-        if (margin >= minMargin || topNetFill >= 0.16) {
+      // RULE 3: SINGLE CONFIDENT FILL (Học sinh tô 1 đáp án duy nhất)
+      else if (topOpt && (topFill >= fillThreshold || topNetFill >= 0.15)) {
+        if (margin >= minMargin || topNetFill >= 0.18) {
           selectedOption = topOpt[0];
           confidence = Math.min(99, Math.round(82 + topFill * 18));
           status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
@@ -1339,7 +1326,7 @@ export async function processAnswerSheet(
         }
       }
       // RULE 4: FAINT / UNCERTAIN FILL
-      else if (topOpt && topFill >= uncertainThreshold && topNetFill >= 0.06) {
+      else if (topOpt && topFill >= uncertainThreshold && topNetFill >= 0.08) {
         selectedOption = topOpt[0];
         status = 'UNCERTAIN';
         confidence = Math.round(topFill * 140);
@@ -1369,7 +1356,7 @@ export async function processAnswerSheet(
       recognizedAnswers.push({
         questionNumber: qNum,
         selectedOption,
-        selectedOptions: filledOptions.map(f => f[0]),
+        selectedOptions: genuineFilledOptions.map(f => f[0]),
         fillRatios: fillMap,
         confidence,
         isCorrect,
