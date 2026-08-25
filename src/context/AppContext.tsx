@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import {
   AnswerSheetTemplate,
+  AnswerStatus,
   BubbleOption,
   Exam,
   ExamStatistics,
@@ -75,7 +76,13 @@ interface AppContextType {
     submissionId: string,
     questionNumber: number,
     newOption: BubbleOption | null,
-    reason: string
+    reason: string,
+    options?: {
+      status?: AnswerStatus;
+      selectedOptions?: BubbleOption[];
+      isCorrect?: boolean;
+      customPoints?: number;
+    }
   ) => void;
   updateSubmissionStudent: (
     submissionId: string,
@@ -664,7 +671,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     submissionId: string,
     questionNumber: number,
     newOption: BubbleOption | null,
-    reason: string
+    reason: string,
+    options?: {
+      status?: AnswerStatus;
+      selectedOptions?: BubbleOption[];
+      isCorrect?: boolean;
+      customPoints?: number;
+    }
   ) => {
     setSubmissions(prev => prev.map(sub => {
       if (sub.id !== submissionId) return sub;
@@ -685,14 +698,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const updatedAnswers = sub.recognizedAnswers.map(ans => {
         if (ans.questionNumber === questionNumber) {
           const correctAns = qConfig?.correctAnswer || ans.correctAnswer;
-          const isCorrect = !!newOption && newOption === correctAns;
-          const pointsEarned = isCorrect ? qPoints : 0;
+          
+          let isCorrect = false;
+          let pointsEarned = 0;
+          let status: AnswerStatus = 'BLANK';
+          let selectedOption = newOption;
+          let selectedOptions = options?.selectedOptions;
+
+          if (options?.status === 'MULTIPLE') {
+            status = 'MULTIPLE';
+            selectedOption = null;
+            selectedOptions = options.selectedOptions || ['A', 'B'];
+            isCorrect = false;
+            pointsEarned = 0;
+          } else if (options?.isCorrect !== undefined) {
+            isCorrect = options.isCorrect;
+            pointsEarned = options.customPoints !== undefined 
+              ? options.customPoints 
+              : (isCorrect ? qPoints : 0);
+            status = options.status || (isCorrect ? 'CORRECT' : 'WRONG');
+          } else if (options?.customPoints !== undefined) {
+            pointsEarned = options.customPoints;
+            isCorrect = pointsEarned > 0;
+            status = options.status || (isCorrect ? 'CORRECT' : 'WRONG');
+          } else if (newOption) {
+            isCorrect = (newOption === correctAns);
+            pointsEarned = isCorrect ? qPoints : 0;
+            status = isCorrect ? 'CORRECT' : 'WRONG';
+          } else {
+            selectedOption = null;
+            status = 'BLANK';
+            isCorrect = false;
+            pointsEarned = 0;
+          }
+
           return {
             ...ans,
-            selectedOption: newOption,
+            selectedOption,
+            selectedOptions,
             correctAnswer: correctAns,
             isCorrect,
-            status: (isCorrect ? 'CORRECT' : (newOption ? 'WRONG' : 'BLANK')) as any,
+            status,
             pointsEarned,
             isManuallyCorrected: true,
             originalOmrAnswer: ans.originalOmrAnswer ?? ans.selectedOption,
@@ -724,15 +770,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const hasIssues = multipleCount > 0 || uncertainCount > 0;
       const newStatus = hasIssues ? 'NEEDS_REVIEW' : 'GRADED';
 
+      let changeDesc = `Sửa Câu ${questionNumber}: `;
+      if (options?.status === 'MULTIPLE') {
+        changeDesc += `Tô nhiều đáp án (${(options.selectedOptions || ['Nhiều đáp án']).join(', ')}) [0 điểm]`;
+      } else if (options?.isCorrect !== undefined || options?.customPoints !== undefined) {
+        changeDesc += `${options?.isCorrect ? 'Cho điểm (ĐÚNG)' : 'Không cho điểm (SAI)'} -> ${options?.customPoints !== undefined ? options.customPoints : (options?.isCorrect ? qPoints : 0)} điểm`;
+      } else {
+        changeDesc += `Chọn ${newOption || 'Bỏ trống (BLANK)'}`;
+      }
+
       const newAuditLog = {
         id: 'log_' + Math.random().toString(36).slice(2),
         submissionId: sub.id,
         questionNumber,
         action: 'TEACHER_OVERRIDE',
-        newValue: `Changed Q${questionNumber} to ${newOption || 'BLANK'}`,
+        newValue: changeDesc,
         changedBy: role === 'admin' ? 'Administrator' : 'Teacher',
         timestamp: new Date().toISOString(),
-        reason: reason || 'Manual review correction'
+        reason: reason || 'Giáo viên chỉnh sửa xác nhận câu trả lời'
       };
 
       return {

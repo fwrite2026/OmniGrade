@@ -53,8 +53,13 @@ export const ReviewQueue: React.FC = () => {
   );
 
   const [selectedQNum, setSelectedQNum] = useState<number>(1);
-  const [overrideReason, setOverrideReason] = useState<string>('Học sinh tẩy đáp án cũ và tô lại');
+  const [overrideReason, setOverrideReason] = useState<string>('Giáo viên xác nhận kết quả chấm');
   
+  // Custom score & multiple selection state
+  const [multipleSelectedOpts, setMultipleSelectedOpts] = useState<BubbleOption[]>(['A', 'B']);
+  const [customScoreInput, setCustomScoreInput] = useState<string>('');
+  const [isCustomScoreMode, setIsCustomScoreMode] = useState<boolean>(false);
+
   // Student ID edit modal state
   const [isEditingStudent, setIsEditingStudent] = useState<boolean>(false);
   const [editSbdInput, setEditSbdInput] = useState<string>('');
@@ -91,6 +96,60 @@ export const ReviewQueue: React.FC = () => {
 
   const handleApplyOverride = (newOption: BubbleOption | null) => {
     overrideAnswer(currentSubmission.id, selectedQNum, newOption, overrideReason);
+  };
+
+  const handleSetCorrectStatus = (isCorrect: boolean) => {
+    const qPoints = activeAnswer?.maxPoints || (activeExam ? activeExam.maxScore / (activeExam.numQuestions || 1) : 0.25);
+    overrideAnswer(
+      currentSubmission.id,
+      selectedQNum,
+      isCorrect ? (activeAnswer?.correctAnswer || 'A') : (activeAnswer?.selectedOption || null),
+      overrideReason || (isCorrect ? 'Giáo viên xác nhận cho điểm câu này' : 'Giáo viên xác nhận không cho điểm câu này'),
+      {
+        isCorrect,
+        status: isCorrect ? 'CORRECT' : 'WRONG',
+        customPoints: isCorrect ? qPoints : 0
+      }
+    );
+  };
+
+  const handleApplyCustomScore = () => {
+    const parsed = parseFloat(customScoreInput);
+    if (isNaN(parsed) || parsed < 0) return;
+    overrideAnswer(
+      currentSubmission.id,
+      selectedQNum,
+      activeAnswer?.selectedOption || activeAnswer?.correctAnswer || 'A',
+      overrideReason || `Giáo viên chấm điểm thủ công: ${parsed} điểm`,
+      {
+        isCorrect: parsed > 0,
+        customPoints: parsed,
+        status: parsed > 0 ? 'CORRECT' : 'WRONG'
+      }
+    );
+    setIsCustomScoreMode(false);
+  };
+
+  const handleApplyMultipleAnswers = (options: BubbleOption[]) => {
+    if (options.length === 0) return;
+    overrideAnswer(
+      currentSubmission.id,
+      selectedQNum,
+      null,
+      overrideReason || `Giáo viên xác nhận HS tô nhiều phương án (${options.join(', ')})`,
+      {
+        status: 'MULTIPLE',
+        selectedOptions: options,
+        isCorrect: false,
+        customPoints: 0
+      }
+    );
+  };
+
+  const toggleMultipleOption = (opt: BubbleOption) => {
+    setMultipleSelectedOpts(prev => 
+      prev.includes(opt) ? prev.filter(o => o !== opt) : [...prev, opt].sort()
+    );
   };
 
   const handleSaveStudentEdit = () => {
@@ -578,58 +637,208 @@ export const ReviewQueue: React.FC = () => {
                 </div>
               </div>
 
-              {/* Right: Teacher Manual Override Actions */}
+              {/* Right: Teacher Manual Override & Score Confirmation Actions */}
               <div className="p-4 bg-cyan-950/20 rounded-2xl border border-cyan-500/20 space-y-4 flex flex-col justify-between">
-                <div className="space-y-2">
-                  <span className="text-xs font-bold text-cyan-300 block uppercase tracking-wider">
-                    {t.review.manualCorrection}
-                  </span>
-                  <p className="text-xs text-slate-300">
-                    Chọn đáp án bạn muốn chỉnh sửa cho câu này:
-                  </p>
+                <div className="space-y-3.5">
+                  {/* Current Score & Status Indicator */}
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 border border-white/10">
+                    <span className="text-xs text-slate-300 font-medium">Điểm câu {selectedQNum}:</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded-lg font-bold font-mono text-xs ${
+                        activeAnswer?.isCorrect 
+                          ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30' 
+                          : 'bg-rose-950/60 text-rose-300 border border-rose-500/30'
+                      }`}>
+                        +{activeAnswer?.pointsEarned ?? 0} / {activeAnswer?.maxPoints ?? 0.25} điểm
+                      </span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                        activeAnswer?.status === 'CORRECT' ? 'bg-emerald-500/20 text-emerald-300' :
+                        activeAnswer?.status === 'MULTIPLE' ? 'bg-amber-500/20 text-amber-300' :
+                        activeAnswer?.status === 'BLANK' ? 'bg-slate-500/20 text-slate-300' :
+                        'bg-rose-500/20 text-rose-300'
+                      }`}>
+                        {activeAnswer?.status}
+                      </span>
+                    </div>
+                  </div>
 
-                  <div className="flex items-center gap-2 pt-1">
-                    {(['A', 'B', 'C', 'D'] as BubbleOption[]).map((opt) => {
-                      const isCurrent = activeAnswer?.selectedOption === opt;
-                      return (
+                  {/* Section 1: Quick Score Confirmation (Cho điểm / Không cho điểm) */}
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] font-bold text-cyan-300 block uppercase tracking-wider">
+                      1. Xác nhận Tính Điểm:
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        id="btn-confirm-score-correct"
+                        type="button"
+                        onClick={() => handleSetCorrectStatus(true)}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs ${
+                          activeAnswer?.isCorrect
+                            ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white ring-2 ring-emerald-400/50 shadow-lg shadow-emerald-500/20'
+                            : 'bg-emerald-950/30 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-950/60'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Cho Điểm (Đúng)</span>
+                      </button>
+
+                      <button
+                        id="btn-confirm-score-wrong"
+                        type="button"
+                        onClick={() => handleSetCorrectStatus(false)}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs ${
+                          !activeAnswer?.isCorrect && activeAnswer?.status !== 'MULTIPLE'
+                            ? 'bg-gradient-to-r from-rose-600 to-red-700 text-white ring-2 ring-rose-400/50 shadow-lg shadow-rose-500/20'
+                            : 'bg-rose-950/30 text-rose-300 border border-rose-500/30 hover:bg-rose-950/60'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        <span>Không Cho Điểm (Sai)</span>
+                      </button>
+                    </div>
+
+                    {/* Custom points input */}
+                    {isCustomScoreMode ? (
+                      <div className="flex items-center gap-2 pt-1">
+                        <input
+                          type="number"
+                          step="0.05"
+                          min="0"
+                          max={activeExam?.maxScore || 10}
+                          value={customScoreInput}
+                          onChange={(e) => setCustomScoreInput(e.target.value)}
+                          placeholder="Nhập số điểm..."
+                          className="flex-1 text-xs border border-cyan-500/40 rounded-xl p-2 bg-white/5 text-white focus:outline-none"
+                        />
                         <button
-                          key={opt}
-                          id={`btn-override-${opt}`}
                           type="button"
-                          onClick={() => handleApplyOverride(opt)}
-                          className={`flex-1 py-2.5 rounded-xl font-bold text-sm transition cursor-pointer shadow-xs ${
-                            isCurrent
-                              ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white ring-2 ring-cyan-400/50 scale-105 shadow-lg shadow-cyan-500/20'
-                              : 'bg-white/5 text-slate-200 border border-white/10 hover:border-cyan-500/50 hover:bg-white/10'
-                          }`}
+                          onClick={handleApplyCustomScore}
+                          className="px-3 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded-xl transition cursor-pointer"
                         >
-                          {opt}
+                          Lưu
                         </button>
-                      );
-                    })}
-                    <button
-                      id="btn-override-blank"
-                      type="button"
-                      onClick={() => handleApplyOverride(null)}
-                      className={`px-3 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
-                        activeAnswer?.selectedOption === null
-                          ? 'bg-rose-600 text-white'
-                          : 'bg-rose-950/30 text-rose-400 border border-rose-500/30 hover:bg-rose-950/50'
-                      }`}
-                    >
-                      Bỏ Trống
-                    </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsCustomScoreMode(false)}
+                          className="px-2 py-2 bg-white/10 hover:bg-white/20 text-slate-300 text-xs rounded-xl transition cursor-pointer"
+                        >
+                          Hủy
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomScoreInput(activeAnswer?.pointsEarned?.toString() || '0');
+                          setIsCustomScoreMode(true);
+                        }}
+                        className="text-[11px] text-cyan-400 hover:text-cyan-300 underline underline-offset-2 cursor-pointer pt-0.5"
+                      >
+                        + Tùy chỉnh số điểm khác ({activeAnswer?.pointsEarned ?? 0}đ)
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Section 2: Confirm Multiple Options Shaded (Xác nhận HS chọn nhiều phương án) */}
+                  <div className="space-y-1.5 pt-1 border-t border-white/10">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1">
+                        <CheckSquare className="w-3 h-3 text-amber-400" />
+                        2. Xác nhận Tô Nhiều Phương Án:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyMultipleAnswers(['A', 'B', 'C', 'D'])}
+                        className="text-[10px] font-bold text-amber-300 hover:text-amber-200 bg-amber-950/40 hover:bg-amber-950/70 border border-amber-500/30 px-2 py-0.5 rounded-lg transition cursor-pointer"
+                      >
+                        Tô cả 4 đáp án (A-B-C-D)
+                      </button>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-amber-950/20 border border-amber-500/20 space-y-2">
+                      <p className="text-[11px] text-slate-300">
+                        Chọn các đáp án học sinh đã tô cùng lúc:
+                      </p>
+                      <div className="flex items-center gap-1.5">
+                        {(['A', 'B', 'C', 'D'] as BubbleOption[]).map((opt) => {
+                          const isOptChecked = multipleSelectedOpts.includes(opt);
+                          return (
+                            <button
+                              key={opt}
+                              type="button"
+                              onClick={() => toggleMultipleOption(opt)}
+                              className={`flex-1 py-1.5 rounded-lg text-xs font-bold border transition cursor-pointer ${
+                                isOptChecked
+                                  ? 'bg-amber-500 text-black border-amber-400 shadow-xs'
+                                  : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+                              }`}
+                            >
+                              {opt} {isOptChecked && '✓'}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <button
+                        id="btn-confirm-multiple"
+                        type="button"
+                        onClick={() => handleApplyMultipleAnswers(multipleSelectedOpts)}
+                        disabled={multipleSelectedOpts.length < 2}
+                        className="w-full py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-black transition cursor-pointer shadow-xs"
+                      >
+                        Xác nhận tô {multipleSelectedOpts.join(' + ')} (0 điểm - MULTIPLE)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Section 3: Single Option Override (Chọn 1 đáp án / Bỏ trống) */}
+                  <div className="space-y-1.5 pt-1 border-t border-white/10">
+                    <span className="text-[11px] font-bold text-slate-300 block uppercase tracking-wider">
+                      3. Hoặc Chọn 1 Đáp Án Cụ Thể:
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {(['A', 'B', 'C', 'D'] as BubbleOption[]).map((opt) => {
+                        const isCurrent = activeAnswer?.selectedOption === opt && activeAnswer?.status !== 'MULTIPLE';
+                        return (
+                          <button
+                            key={opt}
+                            id={`btn-override-${opt}`}
+                            type="button"
+                            onClick={() => handleApplyOverride(opt)}
+                            className={`flex-1 py-2 rounded-xl font-bold text-xs transition cursor-pointer shadow-xs ${
+                              isCurrent
+                                ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white ring-2 ring-cyan-400/50 scale-105 shadow-lg shadow-cyan-500/20'
+                                : 'bg-white/5 text-slate-200 border border-white/10 hover:border-cyan-500/50 hover:bg-white/10'
+                            }`}
+                          >
+                            {opt}
+                          </button>
+                        );
+                      })}
+                      <button
+                        id="btn-override-blank"
+                        type="button"
+                        onClick={() => handleApplyOverride(null)}
+                        className={`px-2.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                          activeAnswer?.status === 'BLANK' || activeAnswer?.selectedOption === null
+                            ? 'bg-rose-600 text-white ring-2 ring-rose-400/50'
+                            : 'bg-rose-950/30 text-rose-400 border border-rose-500/30 hover:bg-rose-950/50'
+                        }`}
+                      >
+                        Bỏ Trống
+                      </button>
+                    </div>
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-slate-400">Ghi chú lý do sửa:</label>
+                <div className="space-y-1.5 pt-2 border-t border-white/10">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Lý do điều chỉnh:</label>
                   <input
                     type="text"
                     value={overrideReason}
                     onChange={(e) => setOverrideReason(e.target.value)}
                     placeholder={t.review.reasonPlaceholder}
-                    className="w-full text-xs border border-white/10 rounded-xl p-2.5 bg-white/5 text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full text-xs border border-white/10 rounded-xl p-2 bg-white/5 text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500/50"
                   />
                 </div>
               </div>
