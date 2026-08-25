@@ -26,6 +26,11 @@ export interface BubbleAnalysisResult {
   cropDataUrl: string;
 }
 
+export interface Point2D {
+  x: number;
+  y: number;
+}
+
 /**
  * Helper to load an Image object from URL / Base64 string
  */
@@ -126,7 +131,180 @@ export function assessImageQuality(
 }
 
 /**
- * Optical Corner Anchor Locator: finds 4 corner alignment marks
+ * Solve 8x8 Linear System using Gaussian Elimination with Partial Pivoting
+ * to find the Projective Transform (Homography) Matrix mapping Destination -> Source
+ */
+function solve8x8(A: number[][], B: number[]): number[] | null {
+  const n = 8;
+  const M: number[][] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    M[i] = [...A[i], B[i]];
+  }
+
+  for (let col = 0; col < n; col++) {
+    let maxRow = col;
+    let maxVal = Math.abs(M[col][col]);
+    for (let row = col + 1; row < n; row++) {
+      const val = Math.abs(M[row][col]);
+      if (val > maxVal) {
+        maxVal = val;
+        maxRow = row;
+      }
+    }
+
+    if (maxVal < 1e-12) return null; // Singular matrix
+
+    if (maxRow !== col) {
+      const temp = M[col];
+      M[col] = M[maxRow];
+      M[maxRow] = temp;
+    }
+
+    const pivot = M[col][col];
+    for (let j = col; j <= n; j++) {
+      M[col][j] /= pivot;
+    }
+
+    for (let row = 0; row < n; row++) {
+      if (row !== col) {
+        const factor = M[row][col];
+        if (Math.abs(factor) > 1e-12) {
+          for (let j = col; j <= n; j++) {
+            M[row][j] -= factor * M[col][j];
+          }
+        }
+      }
+    }
+  }
+
+  const result: number[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    result[i] = M[i][n];
+  }
+  return result;
+}
+
+/**
+ * Computes the 3x3 Inverse Homography matrix that maps Destination (Canvas) points to Source (Photo) points
+ * Destination points: [TL, TR, BR, BL]
+ * Source points:      [TL, TR, BR, BL]
+ */
+function computeInverseHomography(
+  dstQuad: [Point2D, Point2D, Point2D, Point2D],
+  srcQuad: [Point2D, Point2D, Point2D, Point2D]
+): number[] | null {
+  const A: number[][] = [];
+  const B: number[] = [];
+
+  for (let i = 0; i < 4; i++) {
+    const dx = dstQuad[i].x;
+    const dy = dstQuad[i].y;
+    const sx = srcQuad[i].x;
+    const sy = srcQuad[i].y;
+
+    // Mapping: (dx, dy) -> (sx, sy)
+    // Row 1: dx*h00 + dy*h01 + h02 - sx*dx*h20 - sx*dy*h21 = sx
+    A.push([dx, dy, 1, 0, 0, 0, -sx * dx, -sx * dy]);
+    B.push(sx);
+
+    // Row 2: dx*h10 + dy*h11 + h12 - sy*dx*h20 - sy*dy*h21 = sy
+    A.push([0, 0, 0, dx, dy, 1, -sy * dx, -sy * dy]);
+    B.push(sy);
+  }
+
+  const h = solve8x8(A, B);
+  if (!h) return null;
+  // [h00, h01, h02, h10, h11, h12, h20, h21, h22=1]
+  return [...h, 1];
+}
+
+/**
+ * Performs full 4-point Perspective Warping & Rectification via Bilinear Interpolation
+ */
+function warpPerspectiveBilinear(
+  srcCtx: CanvasRenderingContext2D,
+  srcW: number,
+  srcH: number,
+  dstW: number,
+  dstH: number,
+  srcQuad: [Point2D, Point2D, Point2D, Point2D],
+  dstQuad: [Point2D, Point2D, Point2D, Point2D]
+): HTMLCanvasElement {
+  const dstCanvas = document.createElement('canvas');
+  dstCanvas.width = dstW;
+  dstCanvas.height = dstH;
+  const dstCtx = dstCanvas.getContext('2d', { willReadFrequently: true })!;
+
+  const invH = computeInverseHomography(dstQuad, srcQuad);
+  if (!invH) {
+    // Fallback simple stretch
+    dstCtx.drawImage(srcCtx.canvas, 0, 0, dstW, dstH);
+    return dstCanvas;
+  }
+
+  const srcImgData = srcCtx.getImageData(0, 0, srcW, srcH);
+  const srcData = srcImgData.data;
+  const dstImgData = dstCtx.createImageData(dstW, dstH);
+  const dstData = dstImgData.data;
+
+  const [h00, h01, h02, h10, h11, h12, h20, h21] = invH;
+
+  for (let y = 0; y < dstH; y++) {
+    const dstRowOffset = y * dstW * 4;
+    const u0 = h01 * y + h02;
+    const v0 = h11 * y + h12;
+    const w0 = h21 * y + 1.0;
+
+    for (let x = 0; x < dstW; x++) {
+      const w = h20 * x + w0;
+      if (Math.abs(w) < 1e-9) continue;
+      const invW = 1.0 / w;
+      const sx = (h00 * x + u0) * invW;
+      const sy = (h10 * x + v0) * invW;
+
+      const dstIdx = dstRowOffset + (x * 4);
+
+      if (sx >= 0 && sx < srcW - 1 && sy >= 0 && sy < srcH - 1) {
+        const x0 = sx | 0;
+        const y0 = sy | 0;
+        const x1 = x0 + 1;
+        const y1 = y0 + 1;
+
+        const wx = sx - x0;
+        const wy = sy - y0;
+
+        const w00 = (1 - wx) * (1 - wy);
+        const w10 = wx * (1 - wy);
+        const w01 = (1 - wx) * wy;
+        const w11 = wx * wy;
+
+        const idx00 = (y0 * srcW + x0) * 4;
+        const idx10 = (y0 * srcW + x1) * 4;
+        const idx01 = (y1 * srcW + x0) * 4;
+        const idx11 = (y1 * srcW + x1) * 4;
+
+        dstData[dstIdx] = (w00 * srcData[idx00] + w10 * srcData[idx10] + w01 * srcData[idx01] + w11 * srcData[idx11]) | 0;
+        dstData[dstIdx + 1] = (w00 * srcData[idx00 + 1] + w10 * srcData[idx10 + 1] + w01 * srcData[idx01 + 1] + w11 * srcData[idx11 + 1]) | 0;
+        dstData[dstIdx + 2] = (w00 * srcData[idx00 + 2] + w10 * srcData[idx10 + 2] + w01 * srcData[idx01 + 2] + w11 * srcData[idx11 + 2]) | 0;
+        dstData[dstIdx + 3] = 255;
+      } else {
+        // Outside bounds: fill white
+        dstData[dstIdx] = 255;
+        dstData[dstIdx + 1] = 255;
+        dstData[dstIdx + 2] = 255;
+        dstData[dstIdx + 3] = 255;
+      }
+    }
+  }
+
+  dstCtx.putImageData(dstImgData, 0, 0);
+  return dstCanvas;
+}
+
+/**
+ * Optical Corner Anchor Locator:
+ * Locates the 4 solid black alignment marks printed on the 4 corners of the sheet
+ * with wide search margins, multi-scale dark blob detection & geometric auto-completion.
  */
 function findCornerAnchors(
   ctx: CanvasRenderingContext2D,
@@ -135,52 +313,62 @@ function findCornerAnchors(
   expectedZones: RecognitionZone[]
 ): {
   foundCount: number;
-  detectedCorners: {
-    tl?: { x: number; y: number };
-    tr?: { x: number; y: number };
-    bl?: { x: number; y: number };
-    br?: { x: number; y: number };
-  };
+  srcQuad: [Point2D, Point2D, Point2D, Point2D];
+  dstQuad: [Point2D, Point2D, Point2D, Point2D];
 } {
-  const detectedCorners: {
-    tl?: { x: number; y: number };
-    tr?: { x: number; y: number };
-    bl?: { x: number; y: number };
-    br?: { x: number; y: number };
-  } = {};
+  // 1. Determine canonical Destination Anchor Coordinates from template (Default: 60px, 58.76px / 1540px, 2205.76px)
+  const defaultDstTL = { x: width * 0.0375, y: height * 0.026 };
+  const defaultDstTR = { x: width * 0.9625, y: height * 0.026 };
+  const defaultDstBL = { x: width * 0.0375, y: height * 0.976 };
+  const defaultDstBR = { x: width * 0.9625, y: height * 0.976 };
+
+  const ancTL = expectedZones.find(z => z.type === 'anchor_mark' && (z.id?.includes('tl') || z.id === 'anchor_tl' || z.x < 0.2 && z.y < 0.2));
+  const ancTR = expectedZones.find(z => z.type === 'anchor_mark' && (z.id?.includes('tr') || z.id === 'anchor_tr' || z.x > 0.8 && z.y < 0.2));
+  const ancBL = expectedZones.find(z => z.type === 'anchor_mark' && (z.id?.includes('bl') || z.id === 'anchor_bl' || z.x < 0.2 && z.y > 0.8));
+  const ancBR = expectedZones.find(z => z.type === 'anchor_mark' && (z.id?.includes('br') || z.id === 'anchor_br' || z.x > 0.8 && z.y > 0.8));
+
+  const dstQuad: [Point2D, Point2D, Point2D, Point2D] = [
+    ancTL ? { x: (ancTL.x + ancTL.width / 2) * width, y: (ancTL.y + ancTL.height / 2) * height } : defaultDstTL,
+    ancTR ? { x: (ancTR.x + ancTR.width / 2) * width, y: (ancTR.y + ancTR.height / 2) * height } : defaultDstTR,
+    ancBR ? { x: (ancBR.x + ancBR.width / 2) * width, y: (ancBR.y + ancBR.height / 2) * height } : defaultDstBR,
+    ancBL ? { x: (ancBL.x + ancBL.width / 2) * width, y: (ancBL.y + ancBL.height / 2) * height } : defaultDstBL
+  ];
 
   try {
+    // 2. Wide Quadrant Search for Black Solid Anchor Blocks
+    const marginX = Math.round(width * 0.38);
+    const marginY = Math.round(height * 0.35);
+
     const quadrants = [
-      { key: 'tl' as const, defX: 0.035, defY: 0.025, anchorId: 'anchor_tl' },
-      { key: 'tr' as const, defX: 0.945, defY: 0.025, anchorId: 'anchor_tr' },
-      { key: 'bl' as const, defX: 0.035, defY: 0.965, anchorId: 'anchor_bl' },
-      { key: 'br' as const, defX: 0.945, defY: 0.965, anchorId: 'anchor_br' }
+      { key: 'tl' as const, xMin: 0, xMax: marginX, yMin: 0, yMax: marginY, def: dstQuad[0], prefX: 0, prefY: 0 },
+      { key: 'tr' as const, xMin: width - marginX, xMax: width, yMin: 0, yMax: marginY, def: dstQuad[1], prefX: width, prefY: 0 },
+      { key: 'br' as const, xMin: width - marginX, xMax: width, yMin: height - marginY, yMax: height, def: dstQuad[2], prefX: width, prefY: height },
+      { key: 'bl' as const, xMin: 0, xMax: marginX, yMin: height - marginY, yMax: height, def: dstQuad[3], prefX: 0, prefY: height }
     ];
 
+    const detectedPoints: (Point2D | null)[] = [null, null, null, null];
     let foundCount = 0;
 
-    for (const q of quadrants) {
-      const templateAnchor = expectedZones.find(z => z.type === 'anchor_mark' && (z.id?.includes(q.key) || z.id === q.anchorId));
-      const hintX = templateAnchor ? Math.round((templateAnchor.x + templateAnchor.width / 2) * width) : Math.round(q.defX * width);
-      const hintY = templateAnchor ? Math.round((templateAnchor.y + templateAnchor.height / 2) * height) : Math.round(q.defY * height);
+    const markerW = Math.max(18, Math.round(width * 0.032));
+    const markerH = Math.max(14, Math.round(height * 0.020));
 
-      const searchW = Math.min(width, 220);
-      const searchH = Math.min(height, 220);
-      const startX = Math.max(0, Math.min(width - searchW, hintX - Math.round(searchW / 2)));
-      const startY = Math.max(0, Math.min(height - searchH, hintY - Math.round(searchH / 2)));
+    quadrants.forEach((q, qIdx) => {
+      const searchW = q.xMax - q.xMin;
+      const searchH = q.yMax - q.yMin;
+      if (searchW <= markerW || searchH <= markerH) return;
 
-      const imgData = ctx.getImageData(startX, startY, searchW, searchH);
+      const imgData = ctx.getImageData(q.xMin, q.yMin, searchW, searchH);
       const data = imgData.data;
 
-      let bestScore = 0;
-      let bestPt = { x: hintX, y: hintY };
+      let bestScore = -1;
+      let bestX = q.def.x;
+      let bestY = q.def.y;
 
-      const markerW = Math.max(16, Math.round(width * 0.028));
-      const markerH = Math.max(12, Math.round(height * 0.018));
-
-      for (let y = 4; y < searchH - markerH; y += 4) {
-        for (let x = 4; x < searchW - markerW; x += 4) {
+      const step = 4;
+      for (let y = 4; y < searchH - markerH - 4; y += step) {
+        for (let x = 4; x < searchW - markerW - 4; x += step) {
           let darkCount = 0;
+          let lumSum = 0;
           let sampleTotal = 0;
 
           for (let dy = 0; dy < markerH; dy += 3) {
@@ -188,46 +376,92 @@ function findCornerAnchors(
               const idx = ((y + dy) * searchW + (x + dx)) * 4;
               const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
               sampleTotal++;
-              if (lum < 95) darkCount++;
+              lumSum += lum;
+              if (lum < 90) darkCount++;
             }
           }
 
-          const ratio = sampleTotal > 0 ? darkCount / sampleTotal : 0;
-          if (ratio > 0.60 && ratio > bestScore) {
-            bestScore = ratio;
-            bestPt = {
-              x: startX + x + Math.round(markerW / 2),
-              y: startY + y + Math.round(markerH / 2)
-            };
+          const darkRatio = sampleTotal > 0 ? darkCount / sampleTotal : 0;
+          if (darkRatio >= 0.52) {
+            // Check surrounding paper ring contrast
+            const absX = q.xMin + x + markerW / 2;
+            const absY = q.yMin + y + markerH / 2;
+
+            // Distance to image corner factor (anchors sit close to outer corners)
+            const distCorner = Math.hypot(absX - q.prefX, absY - q.prefY);
+            const cornerProximity = Math.max(0.2, 1.0 - (distCorner / (width * 0.5)));
+
+            const score = darkRatio * 1.5 + cornerProximity * 0.8;
+
+            if (score > bestScore) {
+              bestScore = score;
+              bestX = absX;
+              bestY = absY;
+            }
           }
         }
       }
 
-      if (bestScore > 0.60) {
-        detectedCorners[q.key] = bestPt;
+      if (bestScore > 0.85) {
+        detectedPoints[qIdx] = { x: Math.round(bestX), y: Math.round(bestY) };
         foundCount++;
-      } else {
-        detectedCorners[q.key] = { x: hintX, y: hintY };
+      }
+    });
+
+    // 3. Geometric Completion for Missing Anchors if at least 3 were found
+    if (foundCount === 3) {
+      if (!detectedPoints[0] && detectedPoints[1] && detectedPoints[2] && detectedPoints[3]) {
+        // TL = TR + BL - BR
+        detectedPoints[0] = {
+          x: detectedPoints[1].x + detectedPoints[3].x - detectedPoints[2].x,
+          y: detectedPoints[1].y + detectedPoints[3].y - detectedPoints[2].y
+        };
+        foundCount = 4;
+      } else if (!detectedPoints[1] && detectedPoints[0] && detectedPoints[2] && detectedPoints[3]) {
+        // TR = TL + BR - BL
+        detectedPoints[1] = {
+          x: detectedPoints[0].x + detectedPoints[2].x - detectedPoints[3].x,
+          y: detectedPoints[0].y + detectedPoints[2].y - detectedPoints[3].y
+        };
+        foundCount = 4;
+      } else if (!detectedPoints[2] && detectedPoints[0] && detectedPoints[1] && detectedPoints[3]) {
+        // BR = TR + BL - TL
+        detectedPoints[2] = {
+          x: detectedPoints[1].x + detectedPoints[3].x - detectedPoints[0].x,
+          y: detectedPoints[1].y + detectedPoints[3].y - detectedPoints[0].y
+        };
+        foundCount = 4;
+      } else if (!detectedPoints[3] && detectedPoints[0] && detectedPoints[1] && detectedPoints[2]) {
+        // BL = TL + BR - TR
+        detectedPoints[3] = {
+          x: detectedPoints[0].x + detectedPoints[2].x - detectedPoints[1].x,
+          y: detectedPoints[0].y + detectedPoints[2].y - detectedPoints[1].y
+        };
+        foundCount = 4;
       }
     }
 
-    return { foundCount, detectedCorners };
+    const srcQuad: [Point2D, Point2D, Point2D, Point2D] = [
+      detectedPoints[0] || dstQuad[0],
+      detectedPoints[1] || dstQuad[1],
+      detectedPoints[2] || dstQuad[2],
+      detectedPoints[3] || dstQuad[3]
+    ];
+
+    return { foundCount, srcQuad, dstQuad };
   } catch {
     return {
       foundCount: 4,
-      detectedCorners: {
-        tl: { x: width * 0.035, y: height * 0.025 },
-        tr: { x: width * 0.945, y: height * 0.025 },
-        bl: { x: width * 0.035, y: height * 0.965 },
-        br: { x: width * 0.945, y: height * 0.965 }
-      }
+      srcQuad: dstQuad,
+      dstQuad
     };
   }
 }
 
 /**
  * Perspective Warping & Standardized Canvas Generation:
- * Normalizes input scans / photos onto a canonical coordinate frame (1600 x 2260)
+ * Automatically rotates and perspective-warps input scans/photos
+ * onto a canonical coordinate frame (1600 x 2260) using 4 corner alignment anchors.
  */
 export function createStandardizedCanvas(
   img: HTMLImageElement,
@@ -239,43 +473,87 @@ export function createStandardizedCanvas(
   ctx: CanvasRenderingContext2D;
   quality: ImageQualityMetrics;
 } {
-  const canvas = document.createElement('canvas');
-  canvas.width = targetWidth;
-  canvas.height = targetHeight;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  // Step 1: Initial Draw & Orientation Normalization
+  let initialW = img.width || 1200;
+  let initialH = img.height || 1700;
 
-  // Initialize clean background
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(0, 0, targetWidth, targetHeight);
-  ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+  const rawCanvas = document.createElement('canvas');
+  rawCanvas.width = initialW;
+  rawCanvas.height = initialH;
+  const rawCtx = rawCanvas.getContext('2d', { willReadFrequently: true })!;
+  rawCtx.fillStyle = '#FFFFFF';
+  rawCtx.fillRect(0, 0, initialW, initialH);
+  rawCtx.drawImage(img, 0, 0, initialW, initialH);
 
-  // Assess raw image quality
-  const rawQuality = assessImageQuality(ctx, targetWidth, targetHeight);
+  let workingCanvas = rawCanvas;
+  let workingCtx = rawCtx;
+  let rotationDetectedDeg = 0;
 
-  // Check 4 optical corner anchors
-  const { foundCount, detectedCorners } = findCornerAnchors(ctx, targetWidth, targetHeight, templateZones);
+  // If image is landscape (width > height * 1.15), rotate 90° clockwise to portrait
+  if (initialW > initialH * 1.15) {
+    rotationDetectedDeg = 90;
+    const rotCanvas = document.createElement('canvas');
+    rotCanvas.width = initialH;
+    rotCanvas.height = initialW;
+    const rotCtx = rotCanvas.getContext('2d', { willReadFrequently: true })!;
+    rotCtx.translate(initialH, 0);
+    rotCtx.rotate((90 * Math.PI) / 180);
+    rotCtx.drawImage(rawCanvas, 0, 0);
+    workingCanvas = rotCanvas;
+    workingCtx = rotCtx;
+    initialW = rotCanvas.width;
+    initialH = rotCanvas.height;
+  }
 
+  // Step 2: Quality Assessment
+  const rawQuality = assessImageQuality(workingCtx, initialW, initialH);
+
+  // Step 3: Locate 4 Corner Anchors
+  const { foundCount, srcQuad, dstQuad } = findCornerAnchors(workingCtx, initialW, initialH, templateZones);
+
+  // Scale dstQuad to the final target resolution (1600 x 2260)
+  const scaleX = targetWidth / initialW;
+  const scaleY = targetHeight / initialH;
+  const targetDstQuad: [Point2D, Point2D, Point2D, Point2D] = [
+    { x: dstQuad[0].x * scaleX, y: dstQuad[0].y * scaleY },
+    { x: dstQuad[1].x * scaleX, y: dstQuad[1].y * scaleY },
+    { x: dstQuad[2].x * scaleX, y: dstQuad[2].y * scaleY },
+    { x: dstQuad[3].x * scaleX, y: dstQuad[3].y * scaleY }
+  ];
+
+  // Calculate skew/offset from source to destination
+  const offsetTL = Math.hypot(srcQuad[0].x * scaleX - targetDstQuad[0].x, srcQuad[0].y * scaleY - targetDstQuad[0].y);
+  const offsetTR = Math.hypot(srcQuad[1].x * scaleX - targetDstQuad[1].x, srcQuad[1].y * scaleY - targetDstQuad[1].y);
+  const offsetBR = Math.hypot(srcQuad[2].x * scaleX - targetDstQuad[2].x, srcQuad[2].y * scaleY - targetDstQuad[2].y);
+  const offsetBL = Math.hypot(srcQuad[3].x * scaleX - targetDstQuad[3].x, srcQuad[3].y * scaleY - targetDstQuad[3].y);
+  const totalOffset = offsetTL + offsetTR + offsetBR + offsetBL;
+
+  let canvas: HTMLCanvasElement;
   let isPerspectiveCorrected = false;
 
-  // If 4 anchors are confidently detected and have skew, warp perspective
-  if (foundCount >= 4 && detectedCorners.tl && detectedCorners.tr && detectedCorners.bl && detectedCorners.br) {
-    const srcTL = detectedCorners.tl;
-    const srcTR = detectedCorners.tr;
-    const srcBL = detectedCorners.bl;
-    const srcBR = detectedCorners.br;
-
-    const dstTL = { x: targetWidth * 0.035, y: targetHeight * 0.025 };
-    const dstTR = { x: targetWidth * 0.945, y: targetHeight * 0.025 };
-    const dstBL = { x: targetWidth * 0.035, y: targetHeight * 0.965 };
-    const dstBR = { x: targetWidth * 0.945, y: targetHeight * 0.965 };
-
-    const offsetTL = Math.abs(srcTL.x - dstTL.x) + Math.abs(srcTL.y - dstTL.y);
-    const offsetTR = Math.abs(srcTR.x - dstTR.x) + Math.abs(srcTR.y - dstTR.y);
-
-    if (offsetTL > 14 || offsetTR > 14) {
-      isPerspectiveCorrected = true;
-    }
+  // Step 4: Apply High-Precision Perspective Warp
+  if (foundCount >= 3 && totalOffset > 8) {
+    canvas = warpPerspectiveBilinear(
+      workingCtx,
+      initialW,
+      initialH,
+      targetWidth,
+      targetHeight,
+      srcQuad,
+      targetDstQuad
+    );
+    isPerspectiveCorrected = true;
+  } else {
+    canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, targetWidth, targetHeight);
+    ctx.drawImage(workingCanvas, 0, 0, targetWidth, targetHeight);
   }
+
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
 
   const quality: ImageQualityMetrics = {
     blurScore: rawQuality.blurScore,
@@ -283,7 +561,7 @@ export function createStandardizedCanvas(
     brightnessScore: rawQuality.brightnessScore,
     isWellLit: rawQuality.isWellLit,
     anchorsDetectedCount: foundCount,
-    rotationDetectedDeg: 0,
+    rotationDetectedDeg,
     isPerspectiveCorrected
   };
 
@@ -298,7 +576,7 @@ export function createStandardizedCanvas(
  *   1. Average Luminance Intensity Drop: relative drop from paper background
  *   2. Dark Pixel Percentage: ratio of pixels darker than paper threshold
  *   3. Core Density: central pencil mark concentration vs hollow printed letters
- * - Auto-aligns centroid with micro-search (±2px) to handle slight registration jitter
+ * - Auto-aligns centroid with micro-search (±3px) to handle slight registration jitter
  */
 export function analyzeBubbleFill(
   ctx: CanvasRenderingContext2D,
@@ -361,10 +639,9 @@ export function analyzeBubbleFill(
     }
 
     const localPaperLum = bgCount > 0 ? (bgLumSum / bgCount) : 240;
-    // Dark threshold relative to paper background: anything significantly darker than paper
     const darkCutoff = Math.min(185, Math.max(70, localPaperLum - 35));
 
-    // 2. Micro-Centroid Peak Alignment: test offsets (dx, dy in [-2, 0, 2]) for peak fill score
+    // 2. Micro-Centroid Peak Alignment: test offsets for peak fill score
     let bestWeightedScore = -1;
     let bestDarkRatio = 0;
     let bestCoreRatio = 0;
@@ -372,10 +649,12 @@ export function analyzeBubbleFill(
 
     const testOffsets = [
       { ox: 0, oy: 0 },
-      { ox: -2, oy: 0 },
-      { ox: 2, oy: 0 },
-      { ox: 0, oy: -2 },
-      { ox: 0, oy: 2 }
+      { ox: -3, oy: 0 },
+      { ox: 3, oy: 0 },
+      { ox: 0, oy: -3 },
+      { ox: 0, oy: 3 },
+      { ox: -2, oy: -2 },
+      { ox: 2, oy: 2 }
     ];
 
     const bodyRadius = baseRadius * 0.85; // Exclude printed outer circular stroke
@@ -515,7 +794,6 @@ function tryReadQrCode(
           templateId: parsed.tId || parsed.templateId
         };
       } catch {
-        // Plain text QR code payload (e.g. "102345")
         if (code.data.trim()) {
           return { studentId: code.data.trim() };
         }
@@ -531,9 +809,10 @@ function tryReadQrCode(
  * Main High-Precision OMR Recognition & Scoring Engine
  * 
  * Accurately identifies:
- * 1. Student ID (Số Báo Danh) via digit column analysis & QR ground truth
- * 2. Exam Code (Mã Đề Thi) with automatic variant key routing
- * 3. Question Options (A, B, C, D) via differential contrast & center-core fill analysis
+ * 1. 4 Corner Optical Anchors & automatically perspective-warps the sheet
+ * 2. Student ID (Số Báo Danh) via digit column analysis & QR ground truth
+ * 3. Exam Code (Mã Đề Thi) with automatic variant key routing
+ * 4. Question Options (A, B, C, D) via differential contrast & center-core fill analysis
  */
 export async function processAnswerSheet(
   imageUrl: string,
@@ -546,9 +825,12 @@ export async function processAnswerSheet(
   const uncertainThreshold = options.uncertainThreshold ?? template.uncertainThreshold ?? 0.14;
   const minMargin = options.minMargin ?? 0.09;
 
-  // 1. Standardize Canvas & Rectify Alignment
+  // 1. Standardize Canvas & Rectify 4 Corner Anchors via Perspective Warping
   const img = await loadImage(imageUrl);
   const { canvas, ctx, quality } = createStandardizedCanvas(img, template.zones, 1600, 2260);
+
+  // Use the rectified canvas data URL for crystal-clear visual inspection overlays
+  const rectifiedImageUrl = canvas.toDataURL('image/jpeg', 0.90);
 
   // 2. Check for QR Code Ground Truth
   const qrData = tryReadQrCode(ctx, canvas.width, canvas.height);
@@ -662,7 +944,7 @@ export async function processAnswerSheet(
     }
   }
 
-  // Look up student in roster (Strict & Flexible multi-match)
+  // Look up student in roster
   let matchedStudent = students.find(s => s.studentId === detectedStudentId);
   if (!matchedStudent && detectedStudentId) {
     const numOnlyDetected = detectedStudentId.replace(/\D/g, '');
@@ -812,7 +1094,6 @@ export async function processAnswerSheet(
         appliedVariantCode = exam.variants[0].code;
       }
     } else {
-      // Default to first variant
       matchedVariant = exam.variants[0];
       appliedVariantCode = exam.variants[0].code;
       if (rawCode) {
@@ -906,13 +1187,10 @@ export async function processAnswerSheet(
 
       const entries = Object.entries(qData.options) as [BubbleOption, { fillRatio: number; coreFillRatio: number; cropUrl: string }][];
       
-      // Sort ascending by fill to compute the noise baseline from the unselected options
       const sortedByFillAsc = [...entries].sort((a, b) => a[1].fillRatio - b[1].fillRatio);
-      // For 4 options, unselected choices are the lowest 3
       const unselectedOptions = sortedByFillAsc.slice(0, Math.max(1, sortedByFillAsc.length - 1));
       const rowBaseline = unselectedOptions.reduce((sum, item) => sum + item[1].fillRatio, 0) / Math.max(1, unselectedOptions.length);
 
-      // Sort descending by fill ratio for decision making
       entries.sort((a, b) => b[1].fillRatio - a[1].fillRatio);
 
       for (const [opt, res] of entries) {
@@ -927,7 +1205,6 @@ export async function processAnswerSheet(
       const topNetFill = topFill - rowBaseline;
       const margin = topFill - secondFill;
 
-      // Count options with significant mark above noise baseline
       const filledOptions = entries.filter(e => e[1].fillRatio >= fillThreshold && (e[1].fillRatio - rowBaseline) >= 0.08);
 
       let selectedOption: BubbleOption | null = null;
@@ -935,32 +1212,27 @@ export async function processAnswerSheet(
       let confidence = 95;
 
       if (filledOptions.length > 1 && margin < 0.09) {
-        // Multiple marks detected -> strictly flag MULTIPLE without guessing
         status = 'MULTIPLE';
         selectedOption = null;
         confidence = Math.round(50 + margin * 100);
         totalMultiple++;
       } else if (topOpt && (topFill >= fillThreshold || topNetFill >= 0.10)) {
         if (margin >= minMargin || topNetFill >= 0.12) {
-          // Confident selection
           selectedOption = topOpt[0];
           confidence = Math.min(99, Math.round(82 + topFill * 18));
           status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
         } else {
-          // Low margin between top 2 choices
           selectedOption = topOpt[0];
           status = 'UNCERTAIN';
           confidence = Math.round(55 + margin * 100);
           totalUncertain++;
         }
       } else if (topOpt && topFill >= uncertainThreshold && topNetFill >= 0.05) {
-        // Faint mark
         selectedOption = topOpt[0];
         status = 'UNCERTAIN';
         confidence = Math.round(topFill * 140);
         totalUncertain++;
       } else {
-        // Completely blank
         selectedOption = null;
         status = 'BLANK';
         confidence = 96;
@@ -1063,7 +1335,7 @@ export async function processAnswerSheet(
     originalStudentId: detectedStudentId || undefined,
     originalExamCode: detectedExamCode || undefined,
     qualityMetrics: quality,
-    scannedImageUrl: imageUrl,
+    scannedImageUrl: rectifiedImageUrl || imageUrl,
     scanDate: new Date().toISOString(),
     status: overallStatus,
     totalScore: finalScore,

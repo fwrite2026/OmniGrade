@@ -1,4 +1,5 @@
 import { BubbleOption, RecognitionZone } from '../types';
+import { createStandardizedCanvas } from './omrEngine';
 
 export interface DetectedBubble {
   cx: number;          // Center X in standardized canvas pixels (1200x1697)
@@ -82,17 +83,10 @@ export async function detectBubblesFromImageData(
     img = await loadImageFromUrl(dataUrl);
   }
 
-  // Work on standardized high-definition canvas (1200 x 1697 A4 ratio)
+  // Work on standardized high-definition canvas (1200 x 1697 A4 ratio) with 4-corner perspective rectification
   const targetW = 1200;
   const targetH = 1697;
-  const canvas = document.createElement('canvas');
-  canvas.width = targetW;
-  canvas.height = targetH;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(0, 0, targetW, targetH);
-  ctx.drawImage(img, 0, 0, targetW, targetH);
+  const { canvas, ctx } = createStandardizedCanvas(img, [], targetW, targetH);
 
   const imgData = ctx.getImageData(0, 0, targetW, targetH);
   const data = imgData.data;
