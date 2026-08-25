@@ -729,17 +729,23 @@ export function analyzeBubbleFill(
       const meanDropFraction = Math.max(0, (localPaperLum - meanLum) / Math.max(1, localPaperLum));
 
       // Font line baseline suppression:
-      // Thin printed font letters (A, B, C, D, 0-9) occupy ~0.05-0.08 of inner pixels with drop ~0.05.
-      // Pencil shading occupies > 0.25 of inner pixels with drop > 0.18.
-      const netDark = Math.max(0, (darkRatio - 0.055) / 0.945);
-      const netDrop = Math.max(0, (meanDropFraction - 0.045) / 0.955);
-      const netCore = Math.max(0, (coreDarkRatio - 0.05) / 0.95);
+      // Thin printed font letters/digits occupy ~0.04-0.09 of inner pixels with drop ~0.05.
+      // Genuine student pencil/pen shading occupies >= 0.35-0.95 with drop >= 0.20-0.70.
+      let fillScore = 0;
+      if (darkRatio < 0.11 && meanDropFraction < 0.10) {
+        fillScore = Math.max(0, darkRatio * 0.75); // Clean empty circle: 0.00 - 0.08
+      } else {
+        // Normalized coverage factors
+        const densityFactor = Math.min(1.0, Math.max(0, (darkRatio - 0.05) / 0.65));
+        const contrastFactor = Math.min(1.0, Math.max(0, (meanDropFraction - 0.05) / 0.40));
+        const coreFactor = Math.min(1.0, Math.max(0, (coreDarkRatio - 0.05) / 0.60));
 
-      let fillScore = 0.45 * netDark + 0.30 * netDrop + 0.15 * netCore + 0.10 * deepDarkRatio;
+        fillScore = 0.50 * densityFactor + 0.30 * contrastFactor + 0.20 * coreFactor;
 
-      // Graphite density boost for heavy 2B lead
-      if (deepDarkRatio >= 0.25) {
-        fillScore = Math.min(1.0, fillScore + deepDarkRatio * 0.25);
+        // When student fills the bubble with pencil/pen, scale into 0.60 - 1.00 range
+        if (darkRatio >= 0.32 || deepDarkRatio >= 0.15) {
+          fillScore = Math.max(0.60, Math.min(1.0, fillScore * 1.15 + deepDarkRatio * 0.20));
+        }
       }
 
       if (fillScore > bestFillScore) {
@@ -917,44 +923,32 @@ export async function processAnswerSheet(
 
     for (const colIdx of sortedSbdCols) {
       const col = sbdColumns[colIdx];
-      // Calculate baseline noise from lower 8 options
-      const sortedFills = [...col].sort((a, b) => a.fill - b.fill);
-      const lowSlice = sortedFills.slice(0, Math.min(8, sortedFills.length));
-      const baselineFill = lowSlice.reduce((s, b) => s + b.fill, 0) / Math.max(1, lowSlice.length);
-
       col.sort((a, b) => b.fill - a.fill);
       const top = col[0];
       const second = col[1];
 
-      const netFill = top ? top.fill - baselineFill : 0;
-      const secondNetFill = second ? second.fill - baselineFill : 0;
-      const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
+      // Digits with fill density >= 60% (0.60) considered selected by user specification
+      const filledDigits = col.filter(item => item.fill >= 0.60);
 
-      // Student ID Column Digit Recognition
-      const isColBlank = !top || (
-        top.fill < 0.14 ||
-        (netFill < 0.07 && top.fill < 0.28) ||
-        (margin < 0.05 && top.fill < 0.28)
-      );
-      const isColMultiple = (
-        !isColBlank && top && second &&
-        top.fill >= 0.25 &&
-        second.fill >= 0.20 &&
-        secondNetFill >= 0.09 &&
-        margin < 0.08
-      );
-
-      if (isColMultiple) {
+      if (filledDigits.length === 1) {
+        // Exactly 1 digit with fill >= 60%
+        detectedStudentId += filledDigits[0].digit.toString();
+        sbdConfAcc += Math.min(99, Math.round(88 + filledDigits[0].fill * 11));
+      } else if (filledDigits.length > 1) {
+        // Multiple digits filled >= 60%
         sbdHasMultiple = true;
         detectedStudentId += '?';
         sbdConfAcc += 50;
-      } else if (isColBlank) {
-        sbdHasBlank = true;
-        detectedStudentId += '_';
-        sbdConfAcc += 85;
       } else {
-        detectedStudentId += top.digit.toString();
-        sbdConfAcc += Math.min(99, Math.round(85 + top.fill * 14));
+        // No digit reached 60%: Check if top has clear standout or is genuinely blank
+        if (top && top.fill >= 0.48 && (top.fill - (second?.fill || 0)) >= 0.22) {
+          detectedStudentId += top.digit.toString();
+          sbdConfAcc += Math.round(75 + top.fill * 20);
+        } else {
+          sbdHasBlank = true;
+          detectedStudentId += '_';
+          sbdConfAcc += 95;
+        }
       }
     }
 
@@ -1037,43 +1031,32 @@ export async function processAnswerSheet(
 
     for (const colIdx of sortedCodeCols) {
       const col = codeColumns[colIdx];
-      const sortedFills = [...col].sort((a, b) => a.fill - b.fill);
-      const lowSlice = sortedFills.slice(0, Math.min(8, sortedFills.length));
-      const baselineFill = lowSlice.reduce((s, b) => s + b.fill, 0) / Math.max(1, lowSlice.length);
-
       col.sort((a, b) => b.fill - a.fill);
       const top = col[0];
       const second = col[1];
 
-      const netFill = top ? top.fill - baselineFill : 0;
-      const secondNetFill = second ? second.fill - baselineFill : 0;
-      const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
+      // Digits with fill density >= 60% (0.60) considered selected by user specification
+      const filledDigits = col.filter(item => item.fill >= 0.60);
 
-      // Exam Code Column Digit Recognition
-      const isColBlank = !top || (
-        top.fill < 0.14 ||
-        (netFill < 0.07 && top.fill < 0.28) ||
-        (margin < 0.05 && top.fill < 0.28)
-      );
-      const isColMultiple = (
-        !isColBlank && top && second &&
-        top.fill >= 0.25 &&
-        second.fill >= 0.20 &&
-        secondNetFill >= 0.09 &&
-        margin < 0.08
-      );
-
-      if (isColMultiple) {
+      if (filledDigits.length === 1) {
+        // Exactly 1 digit with fill >= 60%
+        detectedExamCode += filledDigits[0].digit.toString();
+        codeConfAcc += Math.min(99, Math.round(88 + filledDigits[0].fill * 11));
+      } else if (filledDigits.length > 1) {
+        // Multiple digits filled >= 60%
         codeHasMultiple = true;
         detectedExamCode += '?';
         codeConfAcc += 50;
-      } else if (isColBlank) {
-        codeHasBlank = true;
-        detectedExamCode += '_';
-        codeConfAcc += 85;
       } else {
-        detectedExamCode += top.digit.toString();
-        codeConfAcc += Math.min(99, Math.round(85 + top.fill * 14));
+        // No digit reached 60%: Check if top has clear standout or is genuinely blank
+        if (top && top.fill >= 0.48 && (top.fill - (second?.fill || 0)) >= 0.22) {
+          detectedExamCode += top.digit.toString();
+          codeConfAcc += Math.round(75 + top.fill * 20);
+        } else {
+          codeHasBlank = true;
+          detectedExamCode += '_';
+          codeConfAcc += 95;
+        }
       }
     }
 
@@ -1242,53 +1225,43 @@ export async function processAnswerSheet(
 
       const topFill = topOpt ? topOpt[1].fillRatio : 0;
       const secondFill = secondOpt ? secondOpt[1].fillRatio : 0;
-      const topNetFill = topFill - rowBaseline;
-      const secondNetFill = secondOpt ? (secondOpt[1].fillRatio - rowBaseline) : 0;
-      const margin = topFill - secondFill;
+
+      // Options with fill density >= 60% (0.60) considered selected by user specification
+      const filledOptions = entries.filter(e => e[1].fillRatio >= 0.60);
 
       let selectedOption: BubbleOption | null = null;
+      let selectedOptions: BubbleOption[] = [];
       let status: RecognizedAnswer['status'] = 'BLANK';
       let confidence = 95;
 
-      const isQuestionBlank = !topOpt || (
-        topFill < 0.14 ||
-        (topNetFill < 0.07 && topFill < 0.28) ||
-        (margin < 0.05 && topFill < 0.28)
-      );
-      const isQuestionMultiple = (
-        !isQuestionBlank && topOpt && secondOpt &&
-        topFill >= 0.25 &&
-        secondFill >= 0.20 &&
-        secondNetFill >= 0.09 &&
-        margin < 0.08
-      );
-
-      // RULE 1: MULTIPLE OPTIONS FILLED
-      if (isQuestionMultiple) {
+      if (filledOptions.length > 1) {
+        // RULE 1: MULTIPLE OPTIONS FILLED (>= 60% on 2 or more options)
         status = 'MULTIPLE';
         selectedOption = null;
-        confidence = Math.round(50 + Math.max(0, margin * 80));
+        selectedOptions = filledOptions.map(f => f[0]);
+        confidence = 60;
         totalMultiple++;
-      }
-      // RULE 2: ALL BLANK (No student pencil mark)
-      else if (isQuestionBlank) {
-        selectedOption = null;
-        status = 'BLANK';
-        confidence = 98;
-        totalBlank++;
-      }
-      // RULE 3: SINGLE CONFIDENT / VALID FILL
-      else if (topOpt) {
-        selectedOption = topOpt[0];
-        confidence = Math.min(99, Math.round(85 + topFill * 14));
+      } else if (filledOptions.length === 1) {
+        // RULE 2: SINGLE VALID SELECTION (Exactly 1 option >= 60%)
+        selectedOption = filledOptions[0][0];
+        selectedOptions = [selectedOption];
+        confidence = Math.min(99, Math.round(85 + filledOptions[0][1].fillRatio * 14));
         status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
-      }
-      // RULE 4: FALLBACK BLANK
-      else {
-        selectedOption = null;
-        status = 'BLANK';
-        confidence = 96;
-        totalBlank++;
+      } else {
+        // RULE 3: No option >= 60% -> Check for borderline single mark vs pure BLANK
+        if (topOpt && topFill >= 0.48 && (topFill - secondFill) >= 0.22) {
+          selectedOption = topOpt[0];
+          selectedOptions = [selectedOption];
+          confidence = Math.round(75 + topFill * 20);
+          status = (selectedOption === qConfig.correctAnswer) ? 'CORRECT' : 'WRONG';
+        } else {
+          // Genuinely BLANK
+          selectedOption = null;
+          selectedOptions = [];
+          status = 'BLANK';
+          confidence = 98;
+          totalBlank++;
+        }
       }
 
       // If status is MULTIPLE or BLANK, it can NEVER be correct or awarded points!
