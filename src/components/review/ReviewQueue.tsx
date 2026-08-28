@@ -22,10 +22,7 @@ import {
   Search,
   CheckSquare,
   Sparkles,
-  Info,
-  ArrowUpDown,
-  SlidersHorizontal,
-  Percent
+  Info
 } from 'lucide-react';
 
 export const ReviewQueue: React.FC = () => {
@@ -72,10 +69,6 @@ export const ReviewQueue: React.FC = () => {
   const [isEditingExamCode, setIsEditingExamCode] = useState<boolean>(false);
   const [editCodeInput, setEditCodeInput] = useState<string>('');
 
-  // Question sorting and filtering state (User Requirement: sắp xếp theo % độ chính xác chấm)
-  const [qSortBy, setQSortBy] = useState<'number_asc' | 'number_desc' | 'confidence_asc' | 'confidence_desc' | 'fill_desc'>('number_asc');
-  const [qFilterStatus, setQFilterStatus] = useState<'ALL' | 'FLAGGED' | 'BLANK' | 'WRONG' | 'CORRECT' | 'MULTIPLE'>('ALL');
-
   const currentSubmission = submissions.find(s => s.id === selectedSubmissionId) || flaggedSubmissions[0] || submissions[0];
 
   // If no submissions at all
@@ -100,36 +93,6 @@ export const ReviewQueue: React.FC = () => {
   const flaggedQuestionsInSub = recognizedAnswers.filter(r =>
     r.status === 'MULTIPLE' || r.status === 'UNCERTAIN' || r.confidence < 75
   );
-
-  // Computed displayed answers according to user-selected sort & filter
-  const displayedAnswers = [...recognizedAnswers]
-    .filter(ans => {
-      if (qFilterStatus === 'FLAGGED') return ans.status === 'MULTIPLE' || ans.status === 'UNCERTAIN' || ans.confidence < 75;
-      if (qFilterStatus === 'BLANK') return ans.status === 'BLANK';
-      if (qFilterStatus === 'WRONG') return ans.status === 'WRONG';
-      if (qFilterStatus === 'CORRECT') return ans.status === 'CORRECT';
-      if (qFilterStatus === 'MULTIPLE') return ans.status === 'MULTIPLE';
-      return true;
-    })
-    .sort((a, b) => {
-      if (qSortBy === 'confidence_asc') {
-        // Tỉ lệ % độ chính xác / tin cậy thấp nhất lên đầu (để giáo viên kiểm tra các câu nghi vấn trước)
-        return a.confidence - b.confidence || a.questionNumber - b.questionNumber;
-      }
-      if (qSortBy === 'confidence_desc') {
-        // Tỉ lệ % độ chính xác / tin cậy cao nhất lên đầu
-        return b.confidence - a.confidence || a.questionNumber - b.questionNumber;
-      }
-      if (qSortBy === 'fill_desc') {
-        const maxFillA = Object.values(a.fillRatios || {}).reduce((max, v) => Math.max(max, v), 0);
-        const maxFillB = Object.values(b.fillRatios || {}).reduce((max, v) => Math.max(max, v), 0);
-        return maxFillB - maxFillA || a.questionNumber - b.questionNumber;
-      }
-      if (qSortBy === 'number_desc') {
-        return b.questionNumber - a.questionNumber;
-      }
-      return a.questionNumber - b.questionNumber;
-    });
 
   const handleApplyOverride = (newOption: BubbleOption | null) => {
     overrideAnswer(currentSubmission.id, selectedQNum, newOption, overrideReason);
@@ -510,126 +473,60 @@ export const ReviewQueue: React.FC = () => {
             </div>
           )}
 
-          {/* Question List Header & Sắp xếp theo % Độ chính xác */}
-          <div className="space-y-2 pt-1 border-t border-white/10">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
-                <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Danh sách câu hỏi ({displayedAnswers.length}/{recognizedAnswers.length}):</span>
-              </span>
-            </div>
-
-            {/* Sort & Filter Controls */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div className="flex items-center gap-1 bg-white/5 border border-white/10 rounded-xl px-2 py-1">
-                <ArrowUpDown className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                <select
-                  aria-label="Sắp xếp danh sách câu hỏi"
-                  value={qSortBy}
-                  onChange={(e) => setQSortBy(e.target.value as any)}
-                  className="bg-transparent text-white text-[11px] font-semibold focus:outline-none w-full cursor-pointer"
-                >
-                  <option value="number_asc" className="bg-slate-900 text-white">Câu 1 → N (Thứ tự)</option>
-                  <option value="confidence_asc" className="bg-slate-900 text-white">% Độ chính xác: Thấp nhất ↑ (Cần duyệt)</option>
-                  <option value="confidence_desc" className="bg-slate-900 text-white">% Độ chính xác: Cao nhất ↓</option>
-                  <option value="fill_desc" className="bg-slate-900 text-white">Độ đậm chì (Fill) cao nhất ↓</option>
-                  <option value="number_desc" className="bg-slate-900 text-white">Câu N → 1 (Giảm dần)</option>
-                </select>
-              </div>
-
-              <div className="flex items-center gap-1 bg-white/5 border border-white/10 rounded-xl px-2 py-1">
-                <Percent className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <select
-                  aria-label="Lọc trạng thái câu hỏi"
-                  value={qFilterStatus}
-                  onChange={(e) => setQFilterStatus(e.target.value as any)}
-                  className="bg-transparent text-white text-[11px] font-semibold focus:outline-none w-full cursor-pointer"
-                >
-                  <option value="ALL" className="bg-slate-900 text-white">Tất cả trạng thái</option>
-                  <option value="FLAGGED" className="bg-slate-900 text-white">Cần duyệt / Nghi vấn</option>
-                  <option value="BLANK" className="bg-slate-900 text-white">Bỏ trống (BLANK)</option>
-                  <option value="WRONG" className="bg-slate-900 text-white">Làm sai (WRONG)</option>
-                  <option value="CORRECT" className="bg-slate-900 text-white">Làm đúng (CORRECT)</option>
-                  <option value="MULTIPLE" className="bg-slate-900 text-white">Tô nhiều ô (MULTIPLE)</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
           {/* Full question grid list */}
           <div className="space-y-1 max-h-[380px] overflow-y-auto pr-1">
-            {displayedAnswers.length === 0 ? (
-              <div className="p-4 text-center text-xs text-slate-500 bg-white/5 rounded-2xl">
-                Không tìm thấy câu hỏi phù hợp bộ lọc
-              </div>
-            ) : (
-              displayedAnswers.map((ans) => {
-                const isSelected = ans.questionNumber === selectedQNum;
-                const isFlagged = ans.status === 'MULTIPLE' || ans.status === 'UNCERTAIN' || ans.confidence < 75;
+            {recognizedAnswers.map((ans) => {
+              const isSelected = ans.questionNumber === selectedQNum;
+              const isFlagged = ans.status === 'MULTIPLE' || ans.status === 'UNCERTAIN';
 
-                return (
-                  <div
-                    key={ans.questionNumber}
-                    onClick={() => setSelectedQNum(ans.questionNumber)}
-                    className={`p-2.5 rounded-2xl flex items-center justify-between transition cursor-pointer text-xs ${
-                      isSelected
-                        ? 'bg-cyan-950/50 border border-cyan-500/50 shadow-lg shadow-cyan-500/10'
-                        : isFlagged
-                        ? 'bg-amber-950/30 border border-amber-500/30 hover:bg-amber-950/50'
-                        : 'hover:bg-white/5 border border-white/5'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-300 w-8">Q{ans.questionNumber}</span>
-                      <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[11px] ${
-                        ans.isCorrect
-                          ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
-                          : ans.status === 'BLANK'
-                          ? 'bg-slate-800 text-slate-400 border border-slate-700'
-                          : ans.selectedOption
-                          ? 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
-                          : 'bg-white/10 text-slate-400'
-                      }`}>
-                        {ans.selectedOption || '—'}
-                      </span>
-                      <span className="text-[11px] text-slate-400 font-mono">
-                        (ĐA: {ans.correctAnswer})
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {ans.isManuallyCorrected && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-purple-950/50 text-purple-400 border border-purple-500/30 rounded-full font-semibold">
-                          Đã sửa
-                        </span>
-                      )}
-
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold border ${
-                        ans.confidence < 75
-                          ? 'bg-amber-950/60 text-amber-300 border-amber-500/40'
-                          : ans.confidence < 90
-                          ? 'bg-blue-950/60 text-blue-300 border-blue-500/40'
-                          : 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40'
-                      }`}>
-                        {ans.confidence}%
-                      </span>
-
-                      <span className={`text-[11px] font-semibold hidden sm:inline ${
-                        isFlagged
-                          ? 'text-amber-400'
-                          : ans.status === 'BLANK'
-                          ? 'text-slate-400'
-                          : ans.isCorrect
-                          ? 'text-emerald-400'
-                          : 'text-rose-400'
-                      }`}>
-                        {ans.status}
-                      </span>
-                    </div>
+              return (
+                <div
+                  key={ans.questionNumber}
+                  onClick={() => setSelectedQNum(ans.questionNumber)}
+                  className={`p-2.5 rounded-2xl flex items-center justify-between transition cursor-pointer text-xs ${
+                    isSelected
+                      ? 'bg-cyan-950/50 border border-cyan-500/50 shadow-lg shadow-cyan-500/10'
+                      : isFlagged
+                      ? 'bg-amber-950/30 border border-amber-500/30 hover:bg-amber-950/50'
+                      : 'hover:bg-white/5 border border-white/5'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-300 w-8">Q{ans.questionNumber}</span>
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[11px] ${
+                      ans.isCorrect
+                        ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
+                        : ans.selectedOption
+                        ? 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
+                        : 'bg-white/10 text-slate-400'
+                    }`}>
+                      {ans.selectedOption || '—'}
+                    </span>
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      (ĐA: {ans.correctAnswer})
+                    </span>
                   </div>
-                );
-              })
-            )}
+
+                  <div className="flex items-center gap-2">
+                    {ans.isManuallyCorrected && (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-purple-950/50 text-purple-400 border border-purple-500/30 rounded-full font-semibold">
+                        Đã sửa
+                      </span>
+                    )}
+
+                    <span className={`text-[11px] font-semibold ${
+                      isFlagged
+                        ? 'text-amber-400'
+                        : ans.isCorrect
+                        ? 'text-emerald-400'
+                        : 'text-slate-400'
+                    }`}>
+                      {ans.status} ({ans.confidence}%)
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 

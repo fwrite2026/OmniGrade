@@ -634,14 +634,12 @@ export function analyzeBubbleFill(
     const localCenterX = rawCenterX - patchStartX;
     const localCenterY = rawCenterY - patchStartY;
 
-    // 1. Calculate local paper background from surrounding annulus (1.15r to 1.70r)
-    // Favor horizontal flanks (|dx| >= |dy| * 0.45) to avoid vertical bubble neighbors & top/bottom border boxes
-    const bgInnerRadiusSq = (baseRadius * 1.15) * (baseRadius * 1.15);
-    const bgOuterRadiusSq = (baseRadius * 1.70) * (baseRadius * 1.70);
+    // 1. Calculate local paper background from surrounding annulus (1.25r to 1.65r)
+    const bgInnerRadiusSq = (baseRadius * 1.25) * (baseRadius * 1.25);
+    const bgOuterRadiusSq = (baseRadius * 1.65) * (baseRadius * 1.65);
 
     let bgLumSum = 0;
     let bgCount = 0;
-    const bgLums: number[] = [];
 
     for (let py = 0; py < patchH; py++) {
       for (let px = 0; px < patchW; px++) {
@@ -650,21 +648,13 @@ export function analyzeBubbleFill(
         const distSq = dx * dx + dy * dy;
 
         if (distSq >= bgInnerRadiusSq && distSq <= bgOuterRadiusSq) {
-          const lum = lumGrid[py * patchW + px];
-          bgLums.push(lum);
-          if (Math.abs(dx) >= Math.abs(dy) * 0.45) {
-            bgLumSum += lum;
-            bgCount++;
-          }
+          bgLumSum += lumGrid[py * patchW + px];
+          bgCount++;
         }
       }
     }
 
-    // Use robust percentile filtering to eliminate dark box borders or adjacent bubble ink
-    bgLums.sort((a, b) => a - b);
-    const p80Lum = bgLums.length > 0 ? bgLums[Math.floor(bgLums.length * 0.80)] : 240;
-    const flankAvgLum = bgCount > 0 ? (bgLumSum / bgCount) : 240;
-    const localPaperLum = Math.max(215, Math.max(flankAvgLum, p80Lum));
+    const localPaperLum = bgCount > 0 ? (bgLumSum / bgCount) : 240;
 
     // 2. Micro-alignment offset search (tested in a generous grid up to ±6px to lock onto true bubble center)
     const searchStep = 3;
@@ -927,11 +917,10 @@ export async function processAnswerSheet(
 
     for (const colIdx of sortedSbdCols) {
       const col = sbdColumns[colIdx];
-      // Calculate baseline noise from lower options
+      // Calculate baseline noise from lower 8 options
       const sortedFills = [...col].sort((a, b) => a.fill - b.fill);
       const lowSlice = sortedFills.slice(0, Math.min(8, sortedFills.length));
       const baselineFill = lowSlice.reduce((s, b) => s + b.fill, 0) / Math.max(1, lowSlice.length);
-      const minColFill = sortedFills[0] ? sortedFills[0].fill : 0;
 
       col.sort((a, b) => b.fill - a.fill);
       const top = col[0];
@@ -941,21 +930,17 @@ export async function processAnswerSheet(
       const secondNetFill = second ? second.fill - baselineFill : 0;
       const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
 
-      // Student ID Column Digit Recognition:
-      // An empty digit column has all 10 bubbles with low intensity (< 50%) and approximately equal fills
-      const isColLowIntensityApproxEqual = !top || (top.fill < 0.50 && (
-        netFill < 0.10 ||
-        margin < 0.08 ||
-        (top.fill - minColFill) < 0.14
-      ));
-
-      const isColBlank = !top || top.fill < 0.14 || isColLowIntensityApproxEqual;
-
+      // Student ID Column Digit Recognition
+      const isColBlank = !top || (
+        top.fill < 0.14 ||
+        (netFill < 0.07 && top.fill < 0.28) ||
+        (margin < 0.05 && top.fill < 0.28)
+      );
       const isColMultiple = (
         !isColBlank && top && second &&
-        top.fill >= 0.40 &&
-        second.fill >= 0.35 &&
-        secondNetFill >= 0.15 &&
+        top.fill >= 0.25 &&
+        second.fill >= 0.20 &&
+        secondNetFill >= 0.09 &&
         margin < 0.08
       );
 
@@ -998,15 +983,11 @@ export async function processAnswerSheet(
   // Look up student in roster
   let matchedStudent = students.find(s => s.studentId === detectedStudentId);
   if (!matchedStudent && detectedStudentId) {
-    const cleanDigitsOnly = detectedStudentId.replace(/\D/g, '');
-    if (cleanDigitsOnly) {
+    const numOnlyDetected = detectedStudentId.replace(/\D/g, '');
+    if (numOnlyDetected) {
       matchedStudent = students.find(s => {
         const sNum = s.studentId.replace(/\D/g, '');
-        return sNum === cleanDigitsOnly || 
-               sNum.padStart(6, '0') === cleanDigitsOnly.padStart(6, '0') ||
-               cleanDigitsOnly.padStart(6, '0') === sNum.padStart(6, '0') ||
-               sNum.endsWith(cleanDigitsOnly) ||
-               cleanDigitsOnly.endsWith(sNum);
+        return sNum === numOnlyDetected || sNum.padStart(6, '0') === numOnlyDetected.padStart(6, '0');
       });
     }
   }
@@ -1059,7 +1040,6 @@ export async function processAnswerSheet(
       const sortedFills = [...col].sort((a, b) => a.fill - b.fill);
       const lowSlice = sortedFills.slice(0, Math.min(8, sortedFills.length));
       const baselineFill = lowSlice.reduce((s, b) => s + b.fill, 0) / Math.max(1, lowSlice.length);
-      const minColFill = sortedFills[0] ? sortedFills[0].fill : 0;
 
       col.sort((a, b) => b.fill - a.fill);
       const top = col[0];
@@ -1069,21 +1049,17 @@ export async function processAnswerSheet(
       const secondNetFill = second ? second.fill - baselineFill : 0;
       const margin = second ? (top.fill - second.fill) : (top?.fill || 0);
 
-      // Exam Code Column Digit Recognition:
-      // Low intensity (< 50%) and approximately equal fills indicate an unshaded/blank column
-      const isColLowIntensityApproxEqual = !top || (top.fill < 0.50 && (
-        netFill < 0.10 ||
-        margin < 0.08 ||
-        (top.fill - minColFill) < 0.14
-      ));
-
-      const isColBlank = !top || top.fill < 0.14 || isColLowIntensityApproxEqual;
-
+      // Exam Code Column Digit Recognition
+      const isColBlank = !top || (
+        top.fill < 0.14 ||
+        (netFill < 0.07 && top.fill < 0.28) ||
+        (margin < 0.05 && top.fill < 0.28)
+      );
       const isColMultiple = (
         !isColBlank && top && second &&
-        top.fill >= 0.40 &&
-        second.fill >= 0.35 &&
-        secondNetFill >= 0.15 &&
+        top.fill >= 0.25 &&
+        second.fill >= 0.20 &&
+        secondNetFill >= 0.09 &&
         margin < 0.08
       );
 
@@ -1269,30 +1245,21 @@ export async function processAnswerSheet(
       const topNetFill = topFill - rowBaseline;
       const secondNetFill = secondOpt ? (secondOpt[1].fillRatio - rowBaseline) : 0;
       const margin = topFill - secondFill;
-      const minOptFill = sortedByFillAsc[0] ? sortedByFillAsc[0][1].fillRatio : 0;
 
       let selectedOption: BubbleOption | null = null;
       let status: RecognizedAnswer['status'] = 'BLANK';
       let confidence = 95;
 
-      // User Rule:
-      // "Những câu có độ fill intensity xấp xỉ nhau mà ở mức thấp (dưới 50%) theo trải nghiệm của tôi đều là các câu HS bỏ trống. Nên có thể đánh dấu câu đó là BLANK."
-      const isLowIntensityApproxEqual = topFill < 0.50 && (
-        topNetFill < 0.10 ||
-        margin < 0.08 ||
-        (topFill - minOptFill) < 0.14
-      );
-
       const isQuestionBlank = !topOpt || (
         topFill < 0.14 ||
-        isLowIntensityApproxEqual
+        (topNetFill < 0.07 && topFill < 0.28) ||
+        (margin < 0.05 && topFill < 0.28)
       );
-
       const isQuestionMultiple = (
         !isQuestionBlank && topOpt && secondOpt &&
-        topFill >= 0.40 &&
-        secondFill >= 0.35 &&
-        secondNetFill >= 0.15 &&
+        topFill >= 0.25 &&
+        secondFill >= 0.20 &&
+        secondNetFill >= 0.09 &&
         margin < 0.08
       );
 
