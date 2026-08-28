@@ -16,6 +16,7 @@ import {
 } from '../types';
 import { translations } from '../locales/translations';
 import { DEFAULT_120_TEMPLATE, DEMO_TEMPLATES, DEFAULT_USERS } from '../services/demoData';
+import { generateSampleSubmissions } from '../services/sampleSubmissions';
 import {
   saveTemplateImage,
   loadTemplateImage,
@@ -98,8 +99,13 @@ interface AppContextType {
   ) => void;
   regradeSubmissionWithVariant: (submissionId: string, variantCode: string) => void;
   approveSubmission: (submissionId: string) => void;
+  approveSubmissionsBatch: (submissionIds: string[]) => void;
+  reassignSubmissionExam: (submissionId: string, newExamId: string) => void;
+  reassignSubmissionsExamBatch: (submissionIds: string[], newExamId: string) => void;
   deleteSubmission: (id: string) => void;
   deleteSubmissionsBatch: (ids: string[]) => void;
+  forceSyncSubmissionsToStorage: () => { success: boolean; count: number };
+  generateDemoSubmissions: (examId?: string, count?: number) => { success: boolean; count: number };
 
   // Students & Classes
   students: Student[];
@@ -984,6 +990,76 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }));
   };
 
+  const approveSubmissionsBatch = (submissionIds: string[]) => {
+    const idSet = new Set(submissionIds);
+    setSubmissions(prev => prev.map(sub => {
+      if (!idSet.has(sub.id)) return sub;
+      return {
+        ...sub,
+        status: 'GRADED',
+        needsReviewReason: undefined,
+        auditLogs: [
+          {
+            id: 'log_' + Math.random().toString(36).slice(2),
+            submissionId: sub.id,
+            action: 'BATCH_TEACHER_APPROVAL',
+            newValue: 'Đã duyệt đồng loạt bài chấm',
+            changedBy: role === 'admin' ? 'Administrator' : 'Teacher',
+            timestamp: new Date().toISOString()
+          },
+          ...(sub.auditLogs || [])
+        ]
+      };
+    }));
+  };
+
+  const reassignSubmissionExam = (submissionId: string, newExamId: string) => {
+    const targetExam = exams.find(e => e.id === newExamId);
+    if (!targetExam) return;
+    setSubmissions(prev => prev.map(sub => {
+      if (sub.id !== submissionId) return sub;
+      const newAuditLog = {
+        id: 'log_' + Math.random().toString(36).slice(2),
+        submissionId: sub.id,
+        action: 'EXAM_REASSIGNED',
+        previousValue: `Đề thi cũ: ${sub.examId}`,
+        newValue: `Đề thi mới: ${targetExam.title} (${targetExam.code})`,
+        changedBy: role === 'admin' ? 'Administrator' : 'Teacher',
+        timestamp: new Date().toISOString(),
+        reason: 'Giáo viên chuyển bài sang đề thi khác'
+      };
+      return {
+        ...sub,
+        examId: newExamId,
+        auditLogs: [newAuditLog, ...(sub.auditLogs || [])]
+      };
+    }));
+  };
+
+  const reassignSubmissionsExamBatch = (submissionIds: string[], newExamId: string) => {
+    const targetExam = exams.find(e => e.id === newExamId);
+    if (!targetExam) return;
+    const idSet = new Set(submissionIds);
+    setSubmissions(prev => prev.map(sub => {
+      if (!idSet.has(sub.id)) return sub;
+      const newAuditLog = {
+        id: 'log_' + Math.random().toString(36).slice(2),
+        submissionId: sub.id,
+        action: 'EXAM_REASSIGNED_BATCH',
+        previousValue: `Đề thi cũ: ${sub.examId}`,
+        newValue: `Đề thi mới: ${targetExam.title} (${targetExam.code})`,
+        changedBy: role === 'admin' ? 'Administrator' : 'Teacher',
+        timestamp: new Date().toISOString(),
+        reason: 'Chuyển hàng loạt bài sang đề thi mới'
+      };
+      return {
+        ...sub,
+        examId: newExamId,
+        auditLogs: [newAuditLog, ...(sub.auditLogs || [])]
+      };
+    }));
+  };
+
   const deleteSubmission = (id: string) => {
     deleteSubmissionImage(id).catch(() => {});
     setSubmissions(prev => prev.filter(s => s.id !== id));
@@ -993,6 +1069,83 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const idSet = new Set(ids);
     ids.forEach(id => deleteSubmissionImage(id).catch(() => {}));
     setSubmissions(prev => prev.filter(s => !idSet.has(s.id)));
+  };
+
+  const forceSyncSubmissionsToStorage = (): { success: boolean; count: number } => {
+    try {
+      const safeSubmissions = submissions.map(sub => {
+        if (sub.scannedImageUrl && sub.scannedImageUrl.startsWith('data:') && sub.scannedImageUrl.length > 20000) {
+          saveSubmissionImage(sub.id, sub.scannedImageUrl).catch(() => {});
+          return {
+            ...sub,
+            scannedImageUrl: sub.id,
+            processedImageUrl: undefined,
+            recognizedAnswers: (sub.recognizedAnswers || []).map(ans => ({
+              ...ans,
+              cropImageUrl: undefined
+            }))
+          };
+        }
+        return {
+          ...sub,
+          processedImageUrl: undefined,
+          recognizedAnswers: (sub.recognizedAnswers || []).map(ans => ({
+            ...ans,
+            cropImageUrl: undefined
+          }))
+        };
+      });
+      safeLocalStorageSet('omr_submissions', JSON.stringify(safeSubmissions));
+      return { success: true, count: submissions.length };
+    } catch (err) {
+      console.error('Force sync error:', err);
+      return { success: false, count: submissions.length };
+    }
+  };
+
+  const generateDemoSubmissions = (targetExamId?: string, count = 16): { success: boolean; count: number } => {
+    const targetExam = targetExamId ? exams.find(e => e.id === targetExamId) : (activeExam || exams[0]);
+    let examToUse = targetExam;
+    if (!examToUse) {
+      const fallbackExam: Exam = {
+        id: 'exam_sample_' + Date.now(),
+        title: 'Kiểm tra Khảo sát Chất lượng Tổng hợp',
+        subject: 'Toán học & Khoa học Tự nhiên',
+        grade: '12',
+        className: '12A1',
+        academicYear: '2025-2026',
+        semester: 'Học kỳ I',
+        examType: 'midterm',
+        code: 'EXAM-101',
+        examDate: new Date().toISOString().slice(0, 10),
+        durationMinutes: 90,
+        teacherName: 'Tạ Minh Khôi',
+        templateId: templates[0]?.id || 'tpl_120_fpt',
+        numQuestions: 40,
+        numOptions: 4,
+        maxScore: 10,
+        passingScore: 5.0,
+        decimalPrecision: 2,
+        questions: Array.from({ length: 40 }, (_, idx) => {
+          const opts: BubbleOption[] = ['A', 'B', 'C', 'D'];
+          return {
+            questionNumber: idx + 1,
+            correctAnswer: opts[idx % 4],
+            points: 0.25
+          };
+        }),
+        instructions: 'Dùng bút chì 2B tô kín ô tròn tương ứng với đáp án đúng.',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        status: 'active'
+      };
+      addExam(fallbackExam);
+      examToUse = fallbackExam;
+    }
+
+    const newSampleSubmissions = generateSampleSubmissions(examToUse, count);
+    addSubmissions(newSampleSubmissions);
+    return { success: true, count: newSampleSubmissions.length };
   };
 
   // Student actions
@@ -1032,10 +1185,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Calculate detailed exam statistics & item analysis
   const getExamStatistics = (examId: string): ExamStatistics => {
-    const exam = exams.find(e => e.id === examId);
-    const examSubs = submissions.filter(s => s.examId === examId);
+    const isAll = examId === 'all';
+    const exam = isAll ? null : exams.find(e => e.id === examId);
+    const examSubs = isAll ? submissions : submissions.filter(s => s.examId === examId);
 
-    if (!exam || examSubs.length === 0) {
+    if (examSubs.length === 0) {
       return {
         totalSubmissions: 0,
         gradedCount: 0,
@@ -1055,7 +1209,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const scores = examSubs.map(s => s.totalScore).sort((a, b) => a - b);
     const totalSubmissions = examSubs.length;
     const gradedCount = examSubs.filter(s => s.status === 'GRADED').length;
-    const needsReviewCount = examSubs.filter(s => s.status === 'NEEDS_REVIEW').length;
+    const needsReviewCount = examSubs.filter(s => s.status === 'NEEDS_REVIEW' || s.status === 'MULTIPLE_ANSWERS' || s.status === 'LOW_CONFIDENCE').length;
 
     const sumScore = scores.reduce((a, b) => a + b, 0);
     const averageScore = Number((sumScore / totalSubmissions).toFixed(2));
@@ -1071,7 +1225,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const standardDeviation = Number(Math.sqrt(variance).toFixed(2));
 
     // Pass count
-    const passingThreshold = exam.passingScore ?? 5;
+    const passingThreshold = exam?.passingScore ?? 5.0;
     const passCount = examSubs.filter(s => (s.totalScore ?? 0) >= passingThreshold).length;
     const passRate = Number(((passCount / totalSubmissions) * 100).toFixed(1));
 
@@ -1097,12 +1251,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }));
 
     // Question analytics
-    const examQuestionsList = (exam.questions && exam.questions.length > 0)
+    const examQuestionsList = (exam && exam.questions && exam.questions.length > 0)
       ? exam.questions
-      : Array.from({ length: exam.numQuestions || 120 }, (_, idx) => ({
+      : Array.from({ length: exam?.numQuestions || 40 }, (_, idx) => ({
           questionNumber: idx + 1,
           correctAnswer: (['A', 'B', 'C', 'D'][idx % 4]) as BubbleOption,
-          points: (exam.maxScore || 10) / (exam.numQuestions || 120)
+          points: (exam?.maxScore || 10) / (exam?.numQuestions || 40)
         }));
 
     const questionAnalytics: QuestionAnalytics[] = examQuestionsList.map(qConfig => {
@@ -1297,8 +1451,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateSubmissionExamCode,
         regradeSubmissionWithVariant,
         approveSubmission,
+        approveSubmissionsBatch,
+        reassignSubmissionExam,
+        reassignSubmissionsExamBatch,
         deleteSubmission,
         deleteSubmissionsBatch,
+        forceSyncSubmissionsToStorage,
+        generateDemoSubmissions,
         students,
         classes,
         addStudent,

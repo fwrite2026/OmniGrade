@@ -9,19 +9,23 @@ import {
   TrendingDown,
   TrendingUp,
   Filter,
-  Layers
+  Layers,
+  ArrowUpDown,
+  Sparkles
 } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
 export const ItemAnalysis: React.FC = () => {
-  const { t, activeExam, exams, setActiveExamId, getExamStatistics } = useApp();
+  const { t, activeExam, exams, setActiveExamId, getExamStatistics, submissions } = useApp();
 
+  const [selectedExamId, setSelectedExamId] = useState<string>('all');
   const [difficultyFilter, setDifficultyFilter] = useState<'all' | 'easy' | 'medium' | 'hard'>('all');
+  const [sortBy, setSortBy] = useState<'num_asc' | 'accuracy_asc' | 'accuracy_desc'>('num_asc');
   const [selectedQuestion, setSelectedQuestion] = useState<QuestionAnalytics | null>(null);
 
-  const currentExam = activeExam || exams[0];
+  const currentExam = exams.find(e => e.id === selectedExamId) || activeExam || exams[0];
 
-  if (!currentExam) {
+  if (!currentExam && submissions.length === 0) {
     return (
       <div className="p-12 max-w-xl mx-auto text-center space-y-4">
         <div className="w-16 h-16 rounded-3xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 flex items-center justify-center mx-auto shadow-lg shadow-cyan-500/10">
@@ -35,12 +39,18 @@ export const ItemAnalysis: React.FC = () => {
     );
   }
 
-  const stats = getExamStatistics(currentExam.id);
+  const stats = getExamStatistics(selectedExamId);
   const questionAnalytics = stats.questionAnalytics || [];
 
   const filteredQuestions = questionAnalytics.filter(q => {
     if (difficultyFilter === 'all') return true;
     return q.difficultyLabel === difficultyFilter;
+  });
+
+  filteredQuestions.sort((a, b) => {
+    if (sortBy === 'accuracy_asc') return a.correctPercentage - b.correctPercentage;
+    if (sortBy === 'accuracy_desc') return b.correctPercentage - a.correctPercentage;
+    return a.questionNumber - b.questionNumber;
   });
 
   const activeQ = selectedQuestion || filteredQuestions[0] || questionAnalytics[0];
@@ -55,7 +65,7 @@ export const ItemAnalysis: React.FC = () => {
   ] : [];
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -66,118 +76,144 @@ export const ItemAnalysis: React.FC = () => {
             <span>Phân Tích Câu Hỏi (Item Analysis)</span>
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Đánh giá độ khó, tỷ lệ phương án gây nhiễu và chất lượng câu hỏi cho đề <strong className="text-white">{currentExam.title}</strong>.
+            Đánh giá độ khó, tỷ lệ phương án gây nhiễu và độ phân loại từng câu hỏi trong đề thi.
           </p>
         </div>
 
         {/* Filter Pills & Exam Selector */}
         <div className="flex items-center gap-2 flex-wrap">
-          {exams.length > 1 && (
-            <select
-              value={currentExam.id}
-              onChange={(e) => setActiveExamId(e.target.value)}
-              className="text-xs font-bold text-cyan-300 bg-cyan-950/40 border border-cyan-500/30 rounded-xl p-1.5 focus:outline-hidden"
-            >
-              {exams.map(e => (
-                <option key={e.id} value={e.id} className="bg-slate-900 text-white">
-                  {e.title} ({e.code})
-                </option>
-              ))}
-            </select>
-          )}
+          <select
+            value={selectedExamId}
+            onChange={(e) => {
+              setSelectedExamId(e.target.value);
+              if (e.target.value !== 'all') {
+                setActiveExamId(e.target.value);
+              }
+            }}
+            className="text-xs font-bold text-cyan-300 bg-cyan-950/40 border border-cyan-500/30 rounded-xl p-2 focus:outline-hidden"
+          >
+            <option value="all" className="bg-slate-900 text-cyan-300 font-bold">
+              ★ Toàn bộ đề thi
+            </option>
+            {exams.map(e => (
+              <option key={e.id} value={e.id} className="bg-slate-900 text-white">
+                {e.title} ({e.code})
+              </option>
+            ))}
+          </select>
 
-          {(['all', 'hard', 'medium', 'easy'] as const).map((diff) => (
-            <button
-              key={diff}
-              onClick={() => setDifficultyFilter(diff)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer border ${
-                difficultyFilter === diff
-                  ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white border-cyan-500/40 shadow-lg shadow-cyan-500/20'
-                  : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
-              }`}
-            >
-              {diff === 'all' && 'Tất cả câu'}
-              {diff === 'hard' && 'Khó (< 40%)'}
-              {diff === 'medium' && 'Vừa (40-70%)'}
-              {diff === 'easy' && 'Dễ (> 70%)'}
-            </button>
-          ))}
+          {/* Sort Selector */}
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            className="text-xs font-semibold text-slate-300 bg-white/5 border border-white/10 rounded-xl p-2 focus:outline-hidden"
+          >
+            <option value="num_asc" className="bg-slate-900 text-white">Số thứ tự (1 → N)</option>
+            <option value="accuracy_asc" className="bg-slate-900 text-white">% Đúng: Thấp → Cao (Khó nhất)</option>
+            <option value="accuracy_desc" className="bg-slate-900 text-white">% Đúng: Cao → Thấp (Dễ nhất)</option>
+          </select>
         </div>
+      </div>
+
+      {/* Difficulty Filter Tabs */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {(['all', 'hard', 'medium', 'easy'] as const).map((diff) => (
+          <button
+            key={diff}
+            onClick={() => setDifficultyFilter(diff)}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer border ${
+              difficultyFilter === diff
+                ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white border-cyan-500/40 shadow-lg shadow-cyan-500/20'
+                : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+            }`}
+          >
+            {diff === 'all' && `Tất cả (${questionAnalytics.length} câu)`}
+            {diff === 'hard' && `Khó (< 40% đúng)`}
+            {diff === 'medium' && `Vừa (40% - 70%)`}
+            {diff === 'easy' && `Dễ (> 70% đúng)`}
+          </button>
+        ))}
       </div>
 
       {/* Grid: Left Question List & Right Distractor Deep-dive */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left List (7 Cols) */}
-        <div className="lg:col-span-7 bg-[#0E131F]/80 backdrop-blur-xl rounded-3xl border border-white/5 p-6 shadow-2xl space-y-4">
+        <div className="lg:col-span-7 bg-[#0E131F]/80 backdrop-blur-xl rounded-3xl border border-white/5 p-5 sm:p-6 shadow-2xl space-y-4">
           <div className="flex items-center justify-between border-b border-white/10 pb-3 text-xs font-bold text-slate-400 uppercase">
             <span>Danh sách {filteredQuestions.length} câu hỏi</span>
             <span>Tỷ lệ làm đúng</span>
           </div>
 
-          <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
-            {filteredQuestions.map((q) => {
-              const isSelected = activeQ?.questionNumber === q.questionNumber;
+          {filteredQuestions.length === 0 ? (
+            <div className="text-center py-12 text-slate-400 text-xs">
+              Chưa có dữ liệu phân tích câu hỏi cho bộ lọc này.
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
+              {filteredQuestions.map((q) => {
+                const isSelected = activeQ?.questionNumber === q.questionNumber;
 
-              return (
-                <div
-                  key={q.questionNumber}
-                  onClick={() => setSelectedQuestion(q)}
-                  className={`p-3.5 rounded-2xl border transition cursor-pointer flex items-center justify-between ${
-                    isSelected
-                      ? 'bg-cyan-950/40 border-cyan-500/50 ring-1 ring-cyan-500/40 shadow-lg shadow-cyan-500/10'
-                      : 'border-white/5 hover:border-white/15 bg-white/5'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="w-8 h-8 rounded-xl bg-white/10 font-bold text-xs text-cyan-300 flex items-center justify-center border border-white/10">
-                      Q{q.questionNumber}
-                    </span>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-white">
-                          Đáp án đúng: <span className="text-cyan-400 font-extrabold">{q.correctAnswer}</span>
-                        </span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                          q.difficultyLabel === 'easy'
-                            ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-500/30'
-                            : q.difficultyLabel === 'medium'
-                            ? 'bg-blue-950/50 text-blue-400 border border-blue-500/30'
-                            : 'bg-rose-950/50 text-rose-400 border border-rose-500/30'
-                        }`}>
-                          {q.difficultyLabel === 'easy' ? 'Dễ' : q.difficultyLabel === 'medium' ? 'Vừa' : 'Khó'}
-                        </span>
+                return (
+                  <div
+                    key={q.questionNumber}
+                    onClick={() => setSelectedQuestion(q)}
+                    className={`p-3.5 rounded-2xl border transition cursor-pointer flex items-center justify-between ${
+                      isSelected
+                        ? 'bg-cyan-950/40 border-cyan-500/50 ring-1 ring-cyan-500/40 shadow-lg shadow-cyan-500/10'
+                        : 'border-white/5 hover:border-white/15 bg-white/5'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="w-8 h-8 rounded-xl bg-white/10 font-bold text-xs text-cyan-300 flex items-center justify-center border border-white/10">
+                        Q{q.questionNumber}
+                      </span>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-white">
+                            Đáp án đúng: <span className="text-cyan-400 font-extrabold">{q.correctAnswer}</span>
+                          </span>
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                            q.difficultyLabel === 'easy'
+                              ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-500/30'
+                              : q.difficultyLabel === 'medium'
+                              ? 'bg-blue-950/50 text-blue-400 border border-blue-500/30'
+                              : 'bg-rose-950/50 text-rose-400 border border-rose-500/30'
+                          }`}>
+                            {q.difficultyLabel === 'easy' ? 'Dễ' : q.difficultyLabel === 'medium' ? 'Vừa' : 'Khó'}
+                          </span>
+                        </div>
+                        {q.mostCommonDistractor && (
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Bẫy phổ biến: <strong className="text-amber-300">{q.mostCommonDistractor}</strong> ({q.distractorCounts[q.mostCommonDistractor]} em chọn)
+                          </p>
+                        )}
                       </div>
-                      {q.mostCommonDistractor && (
-                        <p className="text-[11px] text-slate-400 mt-0.5">
-                          Bẫy phổ biến nhất: <strong className="text-amber-300">{q.mostCommonDistractor}</strong> ({q.distractorCounts[q.mostCommonDistractor]} em chọn)
-                        </p>
-                      )}
                     </div>
-                  </div>
 
-                  <div className="text-right">
-                    <span className="text-sm font-bold text-white">{q.correctPercentage}%</span>
-                    <div className="w-20 h-1.5 bg-white/10 rounded-full mt-1.5 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${
-                          q.correctPercentage >= 70
-                            ? 'bg-emerald-500'
-                            : q.correctPercentage >= 40
-                            ? 'bg-cyan-500'
-                            : 'bg-rose-500'
-                        }`}
-                        style={{ width: `${q.correctPercentage}%` }}
-                      />
+                    <div className="text-right">
+                      <span className="text-sm font-bold text-white">{q.correctPercentage}%</span>
+                      <div className="w-20 h-1.5 bg-white/10 rounded-full mt-1.5 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${
+                            q.correctPercentage >= 70
+                              ? 'bg-emerald-500'
+                              : q.correctPercentage >= 40
+                              ? 'bg-cyan-500'
+                              : 'bg-rose-500'
+                          }`}
+                          style={{ width: `${q.correctPercentage}%` }}
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Right Distractor Deep-Dive Visualizer (5 Cols) */}
-        <div className="lg:col-span-5 bg-[#0E131F]/80 backdrop-blur-xl rounded-3xl border border-white/5 p-6 shadow-2xl space-y-6">
+        <div className="lg:col-span-5 bg-[#0E131F]/80 backdrop-blur-xl rounded-3xl border border-white/5 p-5 sm:p-6 shadow-2xl space-y-6">
           {activeQ ? (
             <>
               <div className="border-b border-white/10 pb-3 space-y-1">
@@ -222,7 +258,7 @@ export const ItemAnalysis: React.FC = () => {
                   Đánh giá chuyên môn sư phạm:
                 </span>
                 <ul className="list-disc list-inside space-y-1 text-slate-400 text-[11px] leading-relaxed">
-                  <li>Độ khó (Difficulty Index): <strong className="text-white">p = {activeQ.difficultyIndex}</strong></li>
+                  <li>Chỉ số độ khó (Difficulty Index): <strong className="text-white">p = {activeQ.difficultyIndex}</strong></li>
                   <li>
                     {activeQ.correctPercentage >= 70
                       ? 'Câu hỏi có tính nhận biết tốt, đa số học sinh nắm vững kiến thức cốt lõi.'
@@ -233,7 +269,11 @@ export const ItemAnalysis: React.FC = () => {
                 </ul>
               </div>
             </>
-          ) : null}
+          ) : (
+            <div className="text-center py-16 text-slate-400 text-xs">
+              Chọn một câu hỏi ở danh sách bên trái để xem phân bố đáp án.
+            </div>
+          )}
         </div>
       </div>
     </div>
