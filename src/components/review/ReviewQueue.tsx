@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
-import { BubbleOption, ExamSubmission, RecognizedAnswer } from '../../types';
+import { BubbleOption, ExamSubmission, RecognizedAnswer, QuestionAnalytics } from '../../types';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -22,8 +22,34 @@ import {
   Search,
   CheckSquare,
   Sparkles,
-  Info
+  Info,
+  ArrowUpDown,
+  ArrowDownUp,
+  Percent,
+  Gauge,
+  SlidersHorizontal,
+  Filter,
+  XCircle,
+  TrendingDown,
+  TrendingUp,
+  Layers
 } from 'lucide-react';
+
+export type QuestionSortMode =
+  | 'CONFIDENCE_ASC'   // Độ chính xác OMR: Thấp → Cao (Ưu tiên câu máy nghi vấn/kém tự tin)
+  | 'CONFIDENCE_DESC'  // Độ chính xác OMR: Cao → Thấp
+  | 'ACCURACY_ASC'     // Tỉ lệ % đúng toàn đề: Thấp → Cao (Câu khó nhất)
+  | 'ACCURACY_DESC'    // Tỉ lệ % đúng toàn đề: Cao → Thấp (Câu dễ nhất)
+  | 'FLAGGED_FIRST'    // Nghi vấn / Lỗi lên đầu
+  | 'QUESTION_ASC'     // Số thứ tự 1 → N
+  | 'QUESTION_DESC';   // Số thứ tự N → 1
+
+export type QuestionFilterMode =
+  | 'ALL'
+  | 'FLAGGED'
+  | 'LOW_CONFIDENCE'
+  | 'WRONG'
+  | 'CORRECT';
 
 export const ReviewQueue: React.FC = () => {
   const {
@@ -36,7 +62,8 @@ export const ReviewQueue: React.FC = () => {
     regradeSubmissionWithVariant,
     approveSubmission,
     students,
-    role
+    role,
+    getExamStatistics
   } = useApp();
 
   const flaggedSubmissions = submissions.filter(s =>
@@ -55,6 +82,11 @@ export const ReviewQueue: React.FC = () => {
   const [selectedQNum, setSelectedQNum] = useState<number>(1);
   const [overrideReason, setOverrideReason] = useState<string>('Giáo viên xác nhận kết quả chấm');
   
+  // Sorting & Filtering State for Questions
+  const [sortMode, setSortMode] = useState<QuestionSortMode>('CONFIDENCE_ASC');
+  const [filterMode, setFilterMode] = useState<QuestionFilterMode>('ALL');
+  const [searchQInput, setSearchQInput] = useState<string>('');
+
   // Custom score & multiple selection state
   const [multipleSelectedOpts, setMultipleSelectedOpts] = useState<BubbleOption[]>(['A', 'B']);
   const [customScoreInput, setCustomScoreInput] = useState<string>('');
@@ -70,6 +102,20 @@ export const ReviewQueue: React.FC = () => {
   const [editCodeInput, setEditCodeInput] = useState<string>('');
 
   const currentSubmission = submissions.find(s => s.id === selectedSubmissionId) || flaggedSubmissions[0] || submissions[0];
+
+  // Exam item analytics statistics lookup
+  const examStats = useMemo(() => {
+    if (!currentSubmission?.examId) return null;
+    return getExamStatistics(currentSubmission.examId);
+  }, [currentSubmission?.examId, getExamStatistics, submissions]);
+
+  const questionStatsMap = useMemo(() => {
+    const map = new Map<number, QuestionAnalytics>();
+    if (examStats?.questionAnalytics) {
+      examStats.questionAnalytics.forEach(q => map.set(q.questionNumber, q));
+    }
+    return map;
+  }, [examStats]);
 
   // If no submissions at all
   if (!currentSubmission) {
@@ -87,12 +133,82 @@ export const ReviewQueue: React.FC = () => {
   }
 
   const recognizedAnswers = currentSubmission.recognizedAnswers || [];
-  const activeAnswer = recognizedAnswers.find(r => r.questionNumber === selectedQNum) || recognizedAnswers[0];
 
   // Flagged questions in current submission
   const flaggedQuestionsInSub = recognizedAnswers.filter(r =>
     r.status === 'MULTIPLE' || r.status === 'UNCERTAIN' || r.confidence < 75
   );
+
+  const lowConfidenceQuestionsInSub = recognizedAnswers.filter(r => (r.confidence ?? 100) < 80);
+  const wrongQuestionsInSub = recognizedAnswers.filter(r => !r.isCorrect);
+  const correctQuestionsInSub = recognizedAnswers.filter(r => r.isCorrect);
+
+  // Filtered & Sorted Questions List
+  const sortedFilteredQuestions = useMemo(() => {
+    // 1. Filter
+    let list = [...recognizedAnswers];
+
+    if (filterMode === 'FLAGGED') {
+      list = list.filter(r => r.status === 'MULTIPLE' || r.status === 'UNCERTAIN' || (r.confidence ?? 100) < 75);
+    } else if (filterMode === 'LOW_CONFIDENCE') {
+      list = list.filter(r => (r.confidence ?? 100) < 80);
+    } else if (filterMode === 'WRONG') {
+      list = list.filter(r => !r.isCorrect);
+    } else if (filterMode === 'CORRECT') {
+      list = list.filter(r => r.isCorrect);
+    }
+
+    if (searchQInput.trim()) {
+      const q = searchQInput.trim().toLowerCase().replace(/^câu\s*|^q\s*/i, '');
+      list = list.filter(r => r.questionNumber.toString().includes(q) || r.selectedOption?.toLowerCase().includes(q));
+    }
+
+    // 2. Sort
+    list.sort((a, b) => {
+      if (sortMode === 'CONFIDENCE_ASC') {
+        const confA = a.confidence ?? 100;
+        const confB = b.confidence ?? 100;
+        return confA - confB || a.questionNumber - b.questionNumber;
+      }
+      if (sortMode === 'CONFIDENCE_DESC') {
+        const confA = a.confidence ?? 100;
+        const confB = b.confidence ?? 100;
+        return confB - confA || a.questionNumber - b.questionNumber;
+      }
+      if (sortMode === 'ACCURACY_ASC') {
+        const accA = questionStatsMap.get(a.questionNumber)?.correctPercentage ?? 50;
+        const accB = questionStatsMap.get(b.questionNumber)?.correctPercentage ?? 50;
+        return accA - accB || a.questionNumber - b.questionNumber;
+      }
+      if (sortMode === 'ACCURACY_DESC') {
+        const accA = questionStatsMap.get(a.questionNumber)?.correctPercentage ?? 50;
+        const accB = questionStatsMap.get(b.questionNumber)?.correctPercentage ?? 50;
+        return accB - accA || a.questionNumber - b.questionNumber;
+      }
+      if (sortMode === 'FLAGGED_FIRST') {
+        const getFlagScore = (ans: RecognizedAnswer) => {
+          if (ans.status === 'MULTIPLE') return 5;
+          if (ans.status === 'UNCERTAIN') return 4;
+          if ((ans.confidence ?? 100) < 75) return 3;
+          if (!ans.isCorrect) return 2;
+          return 1;
+        };
+        return getFlagScore(b) - getFlagScore(a) || a.questionNumber - b.questionNumber;
+      }
+      if (sortMode === 'QUESTION_DESC') {
+        return b.questionNumber - a.questionNumber;
+      }
+      // Default: QUESTION_ASC
+      return a.questionNumber - b.questionNumber;
+    });
+
+    return list;
+  }, [recognizedAnswers, filterMode, searchQInput, sortMode, questionStatsMap]);
+
+  const activeAnswer = recognizedAnswers.find(r => r.questionNumber === selectedQNum) || recognizedAnswers[0];
+
+  // Current index in sorted/filtered list
+  const currentSortedIndex = sortedFilteredQuestions.findIndex(q => q.questionNumber === selectedQNum);
 
   const handleApplyOverride = (newOption: BubbleOption | null) => {
     overrideAnswer(currentSubmission.id, selectedQNum, newOption, overrideReason);
@@ -175,6 +291,19 @@ export const ReviewQueue: React.FC = () => {
     }
   };
 
+  const handleNavigateQuestion = (direction: 'prev' | 'next') => {
+    if (sortedFilteredQuestions.length === 0) return;
+    if (currentSortedIndex === -1) {
+      setSelectedQNum(sortedFilteredQuestions[0].questionNumber);
+      return;
+    }
+    if (direction === 'prev' && currentSortedIndex > 0) {
+      setSelectedQNum(sortedFilteredQuestions[currentSortedIndex - 1].questionNumber);
+    } else if (direction === 'next' && currentSortedIndex < sortedFilteredQuestions.length - 1) {
+      setSelectedQNum(sortedFilteredQuestions[currentSortedIndex + 1].questionNumber);
+    }
+  };
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       {/* Header */}
@@ -245,7 +374,7 @@ export const ReviewQueue: React.FC = () => {
 
       {/* 3-Column Review Interface */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column (Question Matrix & Overview) - 4 cols */}
+        {/* Left Column (Question Matrix, Sorting Toolbar & Overview) - 4 cols */}
         <div className="lg:col-span-4 bg-[#0E131F]/80 backdrop-blur-xl rounded-3xl border border-white/5 p-5 shadow-2xl space-y-4">
           {/* Submission Info Box */}
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
@@ -452,81 +581,316 @@ export const ReviewQueue: React.FC = () => {
             )}
           </div>
 
-          {/* Flagged issues alert */}
-          {flaggedQuestionsInSub.length > 0 && (
-            <div className="p-3 bg-amber-950/40 rounded-2xl border border-amber-500/30 text-xs text-amber-300 space-y-1">
-              <span className="font-bold flex items-center gap-1">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                Câu nghi vấn cần duyệt ({flaggedQuestionsInSub.length} câu):
+          {/* QUESTION SORTING & FILTERING TOOLBAR (Sắp xếp theo % Độ chính xác & Tiêu chí) */}
+          <div className="p-3.5 bg-gradient-to-b from-white/10 to-white/5 rounded-2xl border border-white/10 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <ArrowUpDown className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Sắp xếp câu theo % độ chính xác:</span>
               </span>
-              <div className="flex gap-1.5 flex-wrap pt-1">
-                {flaggedQuestionsInSub.map(fq => (
+              <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/60 border border-cyan-500/30 px-1.5 py-0.5 rounded font-bold">
+                {sortedFilteredQuestions.length}/{recognizedAnswers.length} câu
+              </span>
+            </div>
+
+            {/* Granular Sort Dropdown Selector */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-semibold text-slate-400 block">
+                Tiêu chuẩn sắp xếp danh sách câu hỏi:
+              </label>
+              <div className="relative">
+                <select
+                  id="select-review-sort-mode"
+                  value={sortMode}
+                  onChange={(e) => setSortMode(e.target.value as QuestionSortMode)}
+                  className="w-full text-xs font-medium bg-[#080C14] border border-cyan-500/40 text-cyan-200 rounded-xl px-3 py-2 pr-8 focus:outline-none focus:border-cyan-400 appearance-none cursor-pointer"
+                >
+                  <option value="CONFIDENCE_ASC">🎯 Độ chính xác OMR: Thấp → Cao (Ưu tiên câu cần duyệt)</option>
+                  <option value="CONFIDENCE_DESC">🎯 Độ chính xác OMR: Cao → Thấp (Câu rõ nét nhất)</option>
+                  <option value="ACCURACY_ASC">📊 % Làm đúng toàn đề: Thấp → Cao (Câu khó nhất)</option>
+                  <option value="ACCURACY_DESC">📊 % Làm đúng toàn đề: Cao → Thấp (Câu dễ nhất)</option>
+                  <option value="FLAGGED_FIRST">⚠️ Ưu tiên câu nghi vấn / Lỗi lên đầu</option>
+                  <option value="QUESTION_ASC">🔢 Số thứ tự câu (1 → {recognizedAnswers.length})</option>
+                  <option value="QUESTION_DESC">🔢 Số thứ tự câu ({recognizedAnswers.length} → 1)</option>
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-cyan-400">
+                  <ArrowDownUp className="w-3.5 h-3.5" />
+                </div>
+              </div>
+            </div>
+
+            {/* Quick 1-Click Sort Preset Pills */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[10px] text-slate-400">
+                <span>Chọn nhanh kiểu xếp:</span>
+                {sortMode !== 'QUESTION_ASC' && (
+                  <button
+                    type="button"
+                    onClick={() => setSortMode('QUESTION_ASC')}
+                    className="text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
+                  >
+                    Về thứ tự gốc
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  id="btn-sort-omr-confidence"
+                  onClick={() => setSortMode(sortMode === 'CONFIDENCE_ASC' ? 'CONFIDENCE_DESC' : 'CONFIDENCE_ASC')}
+                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition flex items-center justify-between cursor-pointer ${
+                    sortMode === 'CONFIDENCE_ASC' || sortMode === 'CONFIDENCE_DESC'
+                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-xs'
+                      : 'bg-black/30 text-slate-300 border-white/5 hover:bg-white/10'
+                  }`}
+                >
+                  <span className="flex items-center gap-1">
+                    <Gauge className="w-3 h-3 text-cyan-400" />
+                    <span>% OMR {sortMode === 'CONFIDENCE_ASC' ? 'Thấp→Cao' : sortMode === 'CONFIDENCE_DESC' ? 'Cao→Thấp' : 'Độ tin cậy'}</span>
+                  </span>
+                  {sortMode === 'CONFIDENCE_ASC' && <TrendingUp className="w-3 h-3 text-cyan-300" />}
+                  {sortMode === 'CONFIDENCE_DESC' && <TrendingDown className="w-3 h-3 text-cyan-300" />}
+                </button>
+
+                <button
+                  type="button"
+                  id="btn-sort-exam-accuracy"
+                  onClick={() => setSortMode(sortMode === 'ACCURACY_ASC' ? 'ACCURACY_DESC' : 'ACCURACY_ASC')}
+                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition flex items-center justify-between cursor-pointer ${
+                    sortMode === 'ACCURACY_ASC' || sortMode === 'ACCURACY_DESC'
+                      ? 'bg-blue-500/20 text-blue-300 border-blue-500/50 shadow-xs'
+                      : 'bg-black/30 text-slate-300 border-white/5 hover:bg-white/10'
+                  }`}
+                >
+                  <span className="flex items-center gap-1">
+                    <Percent className="w-3 h-3 text-blue-400" />
+                    <span>% Đúng {sortMode === 'ACCURACY_ASC' ? 'Khó→Dễ' : sortMode === 'ACCURACY_DESC' ? 'Dễ→Khó' : 'Toàn đề'}</span>
+                  </span>
+                  {sortMode === 'ACCURACY_ASC' && <TrendingUp className="w-3 h-3 text-blue-300" />}
+                  {sortMode === 'ACCURACY_DESC' && <TrendingDown className="w-3 h-3 text-blue-300" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Search & Filter Tabs */}
+            <div className="pt-2 border-t border-white/10 space-y-2">
+              {/* Search question input */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchQInput}
+                  onChange={(e) => setSearchQInput(e.target.value)}
+                  placeholder="Tìm câu số... (VD: 5, 12)"
+                  className="w-full text-xs bg-black/40 border border-white/10 rounded-xl pl-8 pr-7 py-1.5 text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500/40"
+                />
+                {searchQInput && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQInput('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  >
+                    <XCircle className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Filter chips */}
+              <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setFilterMode('ALL')}
+                  className={`px-2 py-1 rounded-lg font-bold transition whitespace-nowrap cursor-pointer ${
+                    filterMode === 'ALL'
+                      ? 'bg-white/20 text-white shadow-xs'
+                      : 'bg-white/5 text-slate-400 hover:bg-white/10'
+                  }`}
+                >
+                  Tất cả ({recognizedAnswers.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterMode('FLAGGED')}
+                  className={`px-2 py-1 rounded-lg font-bold transition whitespace-nowrap cursor-pointer ${
+                    filterMode === 'FLAGGED'
+                      ? 'bg-amber-500 text-black shadow-xs'
+                      : 'bg-amber-950/40 text-amber-300 hover:bg-amber-950/70'
+                  }`}
+                >
+                  Nghi vấn ({flaggedQuestionsInSub.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterMode('LOW_CONFIDENCE')}
+                  className={`px-2 py-1 rounded-lg font-bold transition whitespace-nowrap cursor-pointer ${
+                    filterMode === 'LOW_CONFIDENCE'
+                      ? 'bg-cyan-500 text-black shadow-xs'
+                      : 'bg-cyan-950/40 text-cyan-300 hover:bg-cyan-950/70'
+                  }`}
+                >
+                  OMR &lt; 80% ({lowConfidenceQuestionsInSub.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterMode('WRONG')}
+                  className={`px-2 py-1 rounded-lg font-bold transition whitespace-nowrap cursor-pointer ${
+                    filterMode === 'WRONG'
+                      ? 'bg-rose-500 text-white shadow-xs'
+                      : 'bg-rose-950/40 text-rose-300 hover:bg-rose-950/70'
+                  }`}
+                >
+                  Sai ({wrongQuestionsInSub.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterMode('CORRECT')}
+                  className={`px-2 py-1 rounded-lg font-bold transition whitespace-nowrap cursor-pointer ${
+                    filterMode === 'CORRECT'
+                      ? 'bg-emerald-500 text-white shadow-xs'
+                      : 'bg-emerald-950/40 text-emerald-300 hover:bg-emerald-950/70'
+                  }`}
+                >
+                  Đúng ({correctQuestionsInSub.length})
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Flagged issues alert pill bar */}
+          {flaggedQuestionsInSub.length > 0 && filterMode !== 'FLAGGED' && (
+            <div className="p-2.5 bg-amber-950/40 rounded-2xl border border-amber-500/30 text-xs text-amber-300 space-y-1">
+              <span className="font-bold flex items-center justify-between">
+                <span className="flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                  Câu nghi vấn OMR ({flaggedQuestionsInSub.length} câu):
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSortMode('CONFIDENCE_ASC')}
+                  className="text-[10px] text-amber-200 underline cursor-pointer"
+                >
+                  Xếp theo % OMR thấp nhất
+                </button>
+              </span>
+              <div className="flex gap-1 flex-wrap pt-0.5">
+                {flaggedQuestionsInSub.slice(0, 6).map(fq => (
                   <button
                     key={fq.questionNumber}
                     onClick={() => setSelectedQNum(fq.questionNumber)}
-                    className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold hover:bg-amber-500/30 transition cursor-pointer"
+                    className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold hover:bg-amber-500/40 transition cursor-pointer"
                   >
-                    Câu {fq.questionNumber} ({fq.status})
+                    Q{fq.questionNumber} ({fq.confidence ?? 0}%)
                   </button>
                 ))}
+                {flaggedQuestionsInSub.length > 6 && (
+                  <span className="text-[10px] text-amber-400/80 self-center">+{flaggedQuestionsInSub.length - 6} câu khác</span>
+                )}
               </div>
             </div>
           )}
 
-          {/* Full question grid list */}
-          <div className="space-y-1 max-h-[380px] overflow-y-auto pr-1">
-            {recognizedAnswers.map((ans) => {
-              const isSelected = ans.questionNumber === selectedQNum;
-              const isFlagged = ans.status === 'MULTIPLE' || ans.status === 'UNCERTAIN';
+          {/* Sorted & Filtered Full Question Grid List */}
+          <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
+            {sortedFilteredQuestions.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-400 border border-white/5 rounded-2xl bg-white/5">
+                Không tìm thấy câu hỏi phù hợp với bộ lọc hiện tại.
+              </div>
+            ) : (
+              sortedFilteredQuestions.map((ans) => {
+                const isSelected = ans.questionNumber === selectedQNum;
+                const isFlagged = ans.status === 'MULTIPLE' || ans.status === 'UNCERTAIN' || (ans.confidence ?? 100) < 75;
+                const qStat = questionStatsMap.get(ans.questionNumber);
+                const examAcc = qStat?.correctPercentage;
 
-              return (
-                <div
-                  key={ans.questionNumber}
-                  onClick={() => setSelectedQNum(ans.questionNumber)}
-                  className={`p-2.5 rounded-2xl flex items-center justify-between transition cursor-pointer text-xs ${
-                    isSelected
-                      ? 'bg-cyan-950/50 border border-cyan-500/50 shadow-lg shadow-cyan-500/10'
-                      : isFlagged
-                      ? 'bg-amber-950/30 border border-amber-500/30 hover:bg-amber-950/50'
-                      : 'hover:bg-white/5 border border-white/5'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-slate-300 w-8">Q{ans.questionNumber}</span>
-                    <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[11px] ${
-                      ans.isCorrect
-                        ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
-                        : ans.selectedOption
-                        ? 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
-                        : 'bg-white/10 text-slate-400'
-                    }`}>
-                      {ans.selectedOption || '—'}
-                    </span>
-                    <span className="text-[11px] text-slate-400 font-mono">
-                      (ĐA: {ans.correctAnswer})
-                    </span>
+                return (
+                  <div
+                    key={ans.questionNumber}
+                    onClick={() => setSelectedQNum(ans.questionNumber)}
+                    className={`p-2.5 rounded-2xl flex flex-col gap-1.5 transition cursor-pointer text-xs border ${
+                      isSelected
+                        ? 'bg-cyan-950/60 border-cyan-500 ring-1 ring-cyan-400/60 shadow-lg shadow-cyan-500/20'
+                        : isFlagged
+                        ? 'bg-amber-950/30 border-amber-500/30 hover:bg-amber-950/50'
+                        : 'hover:bg-white/5 border-white/5 bg-white/5'
+                    }`}
+                  >
+                    {/* Top Row: QNum + Options + Status */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className={`font-bold font-mono px-1.5 py-0.5 rounded text-[11px] ${
+                          isSelected ? 'bg-cyan-500 text-white' : 'bg-white/10 text-slate-200'
+                        }`}>
+                          Q{ans.questionNumber}
+                        </span>
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[11px] ${
+                          ans.isCorrect
+                            ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/40'
+                            : ans.selectedOption
+                            ? 'bg-rose-950/80 text-rose-400 border border-rose-500/40'
+                            : ans.status === 'MULTIPLE'
+                            ? 'bg-amber-950/80 text-amber-300 border border-amber-500/40'
+                            : 'bg-white/10 text-slate-400'
+                        }`}>
+                          {ans.selectedOption || (ans.status === 'MULTIPLE' ? 'M' : '—')}
+                        </span>
+                        <span className="text-[11px] text-slate-400 font-mono">
+                          (ĐA: <strong className="text-emerald-400">{ans.correctAnswer}</strong>)
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        {ans.isManuallyCorrected && (
+                          <span className="text-[9px] px-1.5 py-0.2 bg-purple-950/60 text-purple-300 border border-purple-500/30 rounded font-semibold">
+                            Đã sửa
+                          </span>
+                        )}
+
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                          ans.isCorrect
+                            ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
+                            : ans.status === 'MULTIPLE'
+                            ? 'bg-amber-950/60 text-amber-300 border border-amber-500/30'
+                            : ans.status === 'UNCERTAIN'
+                            ? 'bg-amber-950/60 text-amber-400 border border-amber-500/30'
+                            : 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
+                        }`}>
+                          {ans.status === 'CORRECT' ? 'Đúng' : ans.status === 'WRONG' ? 'Sai' : ans.status}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Bottom Row: % Metrics (% Độ chính xác OMR & % Đúng toàn đề) */}
+                    <div className="flex items-center justify-between text-[10px] pt-1 border-t border-white/5">
+                      {/* OMR Confidence */}
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-400 font-medium">Độ tin cậy OMR:</span>
+                        <span className={`font-mono font-bold px-1 rounded ${
+                          (ans.confidence ?? 100) >= 85
+                            ? 'text-emerald-300 bg-emerald-950/40'
+                            : (ans.confidence ?? 100) >= 70
+                            ? 'text-amber-300 bg-amber-950/40'
+                            : 'text-rose-300 bg-rose-950/40 animate-pulse'
+                        }`}>
+                          {ans.confidence ?? 95}%
+                        </span>
+                      </div>
+
+                      {/* Exam-wide % Accuracy */}
+                      {examAcc !== undefined && (
+                        <div className="flex items-center gap-1 text-slate-400" title="Tỷ lệ % thí sinh làm đúng câu này toàn đề thi">
+                          <span>Đúng đề:</span>
+                          <span className={`font-mono font-bold ${
+                            examAcc >= 70 ? 'text-emerald-400' : examAcc >= 40 ? 'text-blue-400' : 'text-amber-400'
+                          }`}>
+                            {examAcc}%
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-
-                  <div className="flex items-center gap-2">
-                    {ans.isManuallyCorrected && (
-                      <span className="text-[10px] px-1.5 py-0.5 bg-purple-950/50 text-purple-400 border border-purple-500/30 rounded-full font-semibold">
-                        Đã sửa
-                      </span>
-                    )}
-
-                    <span className={`text-[11px] font-semibold ${
-                      isFlagged
-                        ? 'text-amber-400'
-                        : ans.isCorrect
-                        ? 'text-emerald-400'
-                        : 'text-slate-400'
-                    }`}>
-                      {ans.status} ({ans.confidence}%)
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
 
@@ -534,10 +898,17 @@ export const ReviewQueue: React.FC = () => {
         <div className="lg:col-span-8 space-y-6">
           {/* Active Question Detail Card */}
           <div className="bg-[#0E131F]/80 backdrop-blur-xl rounded-3xl border border-white/5 p-6 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-3">
               <div>
-                <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">Đang kiểm tra:</span>
-                <h3 className="font-bold text-white text-lg flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">Đang kiểm tra:</span>
+                  {currentSortedIndex !== -1 && (
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      (Vị trí {currentSortedIndex + 1}/{sortedFilteredQuestions.length} theo danh sách lọc)
+                    </span>
+                  )}
+                </div>
+                <h3 className="font-bold text-white text-lg flex items-center gap-2 mt-0.5">
                   <span>Câu hỏi số {selectedQNum} / {activeExam?.numQuestions || 40}</span>
                   <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold ${
                     activeAnswer?.status === 'CORRECT'
@@ -546,24 +917,31 @@ export const ReviewQueue: React.FC = () => {
                       ? 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
                       : 'bg-amber-950/60 text-amber-400 border border-amber-500/30'
                   }`}>
-                    {activeAnswer?.status} (Độ tin cậy {activeAnswer?.confidence ?? 95}%)
+                    {activeAnswer?.status} (Độ tin cậy OMR {activeAnswer?.confidence ?? 95}%)
                   </span>
                 </h3>
               </div>
 
+              {/* Step Navigation buttons honoring the active sorted list */}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setSelectedQNum(prev => Math.max(1, prev - 1))}
-                  disabled={selectedQNum === 1}
-                  className="p-2 rounded-xl border border-white/10 hover:bg-white/10 text-slate-300 transition cursor-pointer disabled:opacity-30"
+                  id="btn-prev-question"
+                  onClick={() => handleNavigateQuestion('prev')}
+                  disabled={currentSortedIndex <= 0}
+                  className="px-3 py-1.5 rounded-xl border border-white/10 hover:bg-white/10 text-slate-300 text-xs font-bold transition cursor-pointer disabled:opacity-30 flex items-center gap-1"
+                  title="Câu trước đó theo thứ tự sắp xếp"
                 >
                   <ChevronLeft className="w-4 h-4" />
+                  <span>Câu trước</span>
                 </button>
                 <button
-                  onClick={() => setSelectedQNum(prev => Math.min(activeExam?.numQuestions || 40, prev + 1))}
-                  disabled={selectedQNum === (activeExam?.numQuestions || 40)}
-                  className="p-2 rounded-xl border border-white/10 hover:bg-white/10 text-slate-300 transition cursor-pointer disabled:opacity-30"
+                  id="btn-next-question"
+                  onClick={() => handleNavigateQuestion('next')}
+                  disabled={currentSortedIndex >= sortedFilteredQuestions.length - 1}
+                  className="px-3 py-1.5 rounded-xl border border-cyan-500/30 bg-cyan-950/40 hover:bg-cyan-950/70 text-cyan-300 text-xs font-bold transition cursor-pointer disabled:opacity-30 flex items-center gap-1"
+                  title="Câu tiếp theo theo thứ tự sắp xếp"
                 >
+                  <span>Câu tiếp</span>
                   <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
@@ -593,11 +971,18 @@ export const ReviewQueue: React.FC = () => {
 
             {/* Bubble Fill Ratio Meter Visualizer */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {/* Left: OMR Machine Interpretation */}
+              {/* Left: OMR Machine Interpretation & Exam Analytics for Question */}
               <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
-                <span className="text-xs font-bold text-slate-300 block uppercase tracking-wider">
-                  Mật độ điểm ảnh OMR (Fill Density):
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-300 block uppercase tracking-wider">
+                    Mật độ điểm ảnh OMR (Fill Density):
+                  </span>
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
+                    (activeAnswer?.confidence ?? 100) >= 80 ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30' : 'bg-amber-950/60 text-amber-300 border border-amber-500/30'
+                  }`}>
+                    Độ tin cậy: {activeAnswer?.confidence ?? 95}%
+                  </span>
+                </div>
 
                 <div className="space-y-2.5">
                   {['A', 'B', 'C', 'D'].map((opt) => {
@@ -629,7 +1014,23 @@ export const ReviewQueue: React.FC = () => {
                   })}
                 </div>
 
-                <div className="pt-3 border-t border-white/10 flex items-center justify-between text-xs text-slate-400">
+                {/* Exam-wide item statistics for this question */}
+                {questionStatsMap.has(selectedQNum) && (
+                  <div className="p-2.5 bg-cyan-950/30 rounded-xl border border-cyan-500/20 text-[11px] space-y-1 text-slate-300">
+                    <div className="flex items-center justify-between font-bold">
+                      <span className="text-cyan-300 flex items-center gap-1">
+                        <Percent className="w-3 h-3 text-cyan-400" />
+                        Tỉ lệ làm đúng toàn đề:
+                      </span>
+                      <span className="text-white font-mono">{questionStatsMap.get(selectedQNum)?.correctPercentage}%</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400">
+                      Độ khó: <strong className="text-slate-200">{questionStatsMap.get(selectedQNum)?.difficultyLabel === 'easy' ? 'Dễ (>70%)' : questionStatsMap.get(selectedQNum)?.difficultyLabel === 'medium' ? 'Vừa (40-70%)' : 'Khó (<40%)'}</strong> • Bẫy hay gặp: <strong className="text-amber-300">{questionStatsMap.get(selectedQNum)?.mostCommonDistractor || 'Không có'}</strong>
+                    </p>
+                  </div>
+                )}
+
+                <div className="pt-2 border-t border-white/10 flex items-center justify-between text-xs text-slate-400">
                   <span>Đáp án đúng theo đề:</span>
                   <span className="font-bold text-emerald-400 bg-emerald-950/40 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
                     Lựa chọn {activeAnswer?.correctAnswer}
@@ -879,3 +1280,4 @@ export const ReviewQueue: React.FC = () => {
     </div>
   );
 };
+
